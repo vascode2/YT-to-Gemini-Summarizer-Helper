@@ -30,7 +30,7 @@ pieces are the browser extension scripts ([../content.js](../content.js),
 
 ## What it does
 
-Press **Alt+Z** while your mouse is over a YouTube thumbnail in Brave:
+Press **Alt+A** while your mouse is over a YouTube thumbnail in Brave:
 
 0. Activates the **Brave/YouTube** window (via the *Activate Window By Title*
    GNOME extension) so the trigger keystroke lands in Brave **even when Brave is
@@ -76,8 +76,8 @@ Everything else is done where it is reliable:
 | Fire the content script | **`ydotool type "]"`** | Only working synthetic-input path; `]` has no YouTube shortcut and only acts while a thumbnail is hovered. |
 | Read clipboard (copy confirmation) | **`wl-clipboard`** (`wl-paste`) | Native Wayland clipboard. No `GetClipboardSequenceNumber`, so success = **polling** for a youtube URL. |
 | Insert the Korean prompt + submit | **[../gemini.js](../gemini.js)** content script | DOM insertion handles Unicode natively and needs no OS input; works even if the Gemini tab is in the background. |
-| Focus the Brave & Gemini windows | **Activate Window By Title** GNOME extension | Wayland forbids apps from raising other windows; this trusted shell extension exposes a D-Bus method. Brave is raised **before** the trigger so Alt+Z works without clicking Brave first. |
-| Global Alt+Z hotkey | **GNOME custom shortcut** | Wayland has no app-level global hotkey grab; GNOME runs the script. |
+| Focus the Brave & Gemini windows | **Activate Window By Title** GNOME extension | Wayland forbids apps from raising other windows; this trusted shell extension exposes a D-Bus method. Brave is raised **before** the trigger so Alt+A works without clicking Brave first. |
+| Global Alt+A hotkey | **GNOME custom shortcut** | Wayland has no app-level global hotkey grab; GNOME runs the script. |
 
 ## Install
 
@@ -179,7 +179,7 @@ this repo's root (where [../manifest.json](../manifest.json) lives).
 > pulling these changes you **must reload the extension** (the reload button on
 > `brave://extensions`) so the new Gemini script and permission take effect.
 
-### 7. Bind Alt+Z to the script
+### 7. Bind Alt+A to the script
 
 > **Spaces in the path:** GNOME splits a custom-shortcut command on whitespace,
 > so a path like `.../Google Drive/...` breaks unless you wrap it. Run the
@@ -196,7 +196,7 @@ KEY="$BASE.custom-keybinding:$COPYURL_PATH"
 gsettings set $BASE custom-keybindings "['$COPYURL_PATH']"
 gsettings set $KEY name 'CopyURL'
 gsettings set $KEY command "bash -c '\"$SCRIPT\"'"
-gsettings set $KEY binding '<Alt>z'
+gsettings set $KEY binding '<Alt>a'
 ```
 
 > If you already have other custom shortcuts, **append** `$COPYURL_PATH` to the
@@ -215,7 +215,7 @@ The shell knobs below are environment variables read at the top of
 |---|---|---|
 | `COPYURL_TRIGGER_CHAR` | `]` | Character typed to fire `content.js`. |
 | `COPYURL_GEMINI_NEEDLE` | `Gemini` | Substring matched against window titles to find the Gemini window. |
-| `COPYURL_YOUTUBE_NEEDLE` | `YouTube` | Substring matched against window titles to find the Brave/YouTube window, raised before the trigger so Alt+Z works unfocused. |
+| `COPYURL_YOUTUBE_NEEDLE` | `YouTube` | Substring matched against window titles to find the Brave/YouTube window, raised before the trigger so Alt+A works unfocused. |
 | `COPYURL_CLIP_TIMEOUT` | `1.5` | Seconds to wait per attempt for the clipboard to change. |
 | `COPYURL_COPY_ATTEMPTS` | `2` | Trigger retry count. |
 | `COPYURL_BROWSER_FOCUS_DELAY` | `0.2` | Pause after raising Brave, before typing the trigger. |
@@ -230,7 +230,7 @@ The shell knobs below are environment variables read at the top of
 - `Linux/copyurl.sh --check` — verify all dependencies are present.
 - `Linux/copyurl.sh --focus-test` — just raise the Gemini window (focus sanity
   check). The paste itself is driven by the extension, so there is no
-  standalone paste test — use the full **Alt+Z** flow on a real thumbnail.
+  standalone paste test — use the full **Alt+A** flow on a real thumbnail.
 
 ## Troubleshooting
 
@@ -242,7 +242,7 @@ The shell knobs below are environment variables read at the top of
 | Gemini not raised | Extension missing/disabled, or title needle wrong | Re-run the `gdbus` call in step 4; confirm `(true,)`. Adjust `COPYURL_GEMINI_NEEDLE`. |
 | URL copied but nothing pasted into Gemini | **Gemini is in a different browser/profile than the extension** (most common: Gemini in Chrome, YouTube+extension in Brave), or `gemini.js` not loaded / composer selector changed | Run Gemini as a **Brave app in the same profile** (step 5) — `chrome.storage` is per browser+profile, so a Chrome Gemini can't see Brave's payload. Then reload the extension (step 6). Open the Gemini window's DevTools console and look for `[CopyURL/Gemini] ready` and any errors. |
 | Pasted into the wrong field / not submitted | Gemini DOM changed | Update the composer/send selectors in [../gemini.js](../gemini.js). |
-| Alt+Z does nothing | Shortcut not bound, or another app owns Alt+Z | Verify in Settings → Keyboard; try a different chord via the `binding` gsetting. |
+| Alt+A does nothing | Shortcut not bound, or another app owns Alt+A | Verify in Settings → Keyboard; try a different chord via the `binding` gsetting. |
 
 For extension-side diagnostics see [../docs/troubleshooting.md](../docs/troubleshooting.md);
 the content-script notes are shared across all platforms.
@@ -251,7 +251,7 @@ the content-script notes are shared across all platforms.
 
 | Aspect | Windows ([../copy.ahk](../copy.ahk)) | macOS ([../Mac/hammerspoon/init.lua](../Mac/hammerspoon/init.lua)) | Linux ([copyurl.sh](copyurl.sh)) |
 |---|---|---|---|
-| Hotkey | **Alt+Z** | **Option+Z** | **Alt+Z** (GNOME custom shortcut) |
+| Hotkey | **Alt+Z** | **Option+Z** | **Alt+A** (GNOME custom shortcut) |
 | Internal trigger | **F24** | **Option+X** | **`]`** typed via `ydotool type` |
 | Clipboard change detection | `GetClipboardSequenceNumber` | poll contents | poll `wl-paste` for a youtube URL |
 | Window focus | `WinActivate` | `app:activate()` | *Activate Window By Title* extension via D-Bus |

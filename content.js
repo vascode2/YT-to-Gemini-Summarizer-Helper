@@ -288,7 +288,7 @@
   // keymap), but `ydotool type` reliably emits a character. "]" has no YouTube
   // shortcut, and we only act on it while a thumbnail is hovered (so normal "]"
   // typing elsewhere passes straight through). We deliberately do NOT require
-  // !altKey here: the GNOME hotkey is Alt+Z, so the user is often still holding
+  // !altKey here: the GNOME hotkey is Alt+A, so the user is often still holding
   // Alt when copyurl.sh types "]" microseconds later — requiring !altKey made the
   // first press fail (it only worked once Alt was released). Ctrl/Meta are still
   // excluded so it won't collide with browser/OS chords. On macOS, Gemini runs
