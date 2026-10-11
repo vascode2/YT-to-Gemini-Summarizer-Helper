@@ -45,6 +45,8 @@ kGeminiNewChatEachTime := false
 ; Calibrated for the user's display/DPI; re-measure if the new-chat click misses.
 kGeminiNewChatBtnX := 30
 kGeminiNewChatBtnY := 102
+; Windows UI Automation helper that fills and sends the Gemini desktop app composer.
+kGeminiUiHelper := A_ScriptDir "\scripts\send_gemini_desktop.ps1"
 
 ; Text appended AFTER the URL in Gemini (Alt+A). "" = URL only. Clipboard is restored to the plain URL after send.
 kGeminiPasteSuffix := " 한국어로 요약해 줘"
@@ -367,18 +369,68 @@ FindBraveWindow() {
     return 0
 }
 
-FindGeminiWindow() {
-    allWins := WinGetList("ahk_exe chrome.exe")
-    for index, hwnd in allWins {
+GeminiWindowRecord(hwnd, target) {
+    try {
         title := WinGetTitle(hwnd)
         cls := WinGetClass(hwnd)
         visible := DllCall("IsWindowVisible", "Ptr", hwnd)
-        if (visible && cls = "Chrome_WidgetWin_1" && title != "" && InStr(title, "Gemini")) {
-            return hwnd
+        if (visible && cls = "Chrome_WidgetWin_1" && title != "")
+            return {hwnd: hwnd, title: title, class: cls, target: target}
+    }
+    return 0
+}
+
+FindGeminiWindow() {
+    for _i, hwnd in WinGetList("ahk_exe Gemini.exe") {
+        if (WinGetTitle(hwnd) = "Gemini") {
+            gem := GeminiWindowRecord(hwnd, "desktop")
+            if gem
+                return gem
+        }
+    }
+    for _i, hwnd in WinGetList("ahk_exe chrome.exe") {
+        if InStr(WinGetTitle(hwnd), "Gemini") {
+            gem := GeminiWindowRecord(hwnd, "pwa")
+            if gem
+                return gem
         }
     }
     return 0
 }
+GeminiUiSend(gemHwnd, payloadPath, startNewChat) {
+    global kGeminiUiHelper
+    statusPath := A_Temp "\gemini_status_" . DllCall("GetCurrentProcessId") . "_" . A_TickCount . ".txt"
+    try {
+        if FileExist(statusPath)
+            FileDelete(statusPath)
+        cmd := '"powershell.exe" -NoProfile -STA -ExecutionPolicy Bypass -File "' . kGeminiUiHelper
+            . '" -WindowHandle ' . gemHwnd . ' -PayloadPath "' . payloadPath . '" -StatusPath "' . statusPath . '"'
+        if startNewChat
+            cmd .= " -StartNewChat"
+        exitCode := RunWait(cmd, A_ScriptDir, "Hide")
+        status := FileExist(statusPath) ? Trim(FileRead(statusPath, "UTF-8")) : "no-status"
+        DebugLog("Gemini UIA helper exit=" . exitCode . " status=" . status)
+        return {ok: exitCode = 0 && status = "sent", status: status}
+    } catch as err {
+        DebugLog("Gemini UIA helper failed: " . err.Message)
+        return {ok: false, status: err.Message}
+    } finally {
+        try if FileExist(statusPath)
+            FileDelete(statusPath)
+    }
+}
+
+SendGeminiDesktop(gemHwnd, payload, startNewChat := false) {
+    payloadPath := A_Temp "\gemini_payload_" . DllCall("GetCurrentProcessId") . "_" . A_TickCount . ".txt"
+    try {
+        FileAppend(payload, payloadPath, "UTF-8")
+        return GeminiUiSend(gemHwnd, payloadPath, startNewChat)
+    } finally {
+        try if FileExist(payloadPath)
+            FileDelete(payloadPath)
+    }
+}
+
 
 /**
  * Recursively find the largest Chrome_RenderWidgetHostHWND under a top-level Chromium window.
@@ -770,32 +822,26 @@ GeminiTitleIsNewChat(title) {
  * video tool fire again. Success is confirmed by the window title dropping its
  * per-chat topic. Returns true once a topic-less (new) title is seen.
  */
-StartNewGeminiChat(gemHwnd) {
+StartNewGeminiChat(gem) {
     global kGeminiNewChatBtnX, kGeminiNewChatBtnY
     before := ""
-    try before := WinGetTitle(gemHwnd)
-    if (GeminiTitleIsNewChat(before)) {
-        DebugLog("Gemini already on a new chat (title=" . before . ") — skipping new-chat click.")
+    try before := WinGetTitle(gem.hwnd)
+    if (GeminiTitleIsNewChat(before))
         return true
-    }
-    WinGetPos(&wx, &wy, &ww, &wh, gemHwnd)
+    WinGetPos(&wx, &wy, &ww, &wh, gem.hwnd)
     sx := wx + kGeminiNewChatBtnX
     sy := wy + kGeminiNewChatBtnY
     cur := before
     Loop 2 {
-        PostClickAtScreen(gemHwnd, sx, sy)
-        ; Poll up to ~1.2 s for the title to drop its topic.
+        PostClickAtScreen(gem.hwnd, sx, sy)
         Loop 12 {
             Sleep(100)
-            try cur := WinGetTitle(gemHwnd)
-            if (GeminiTitleIsNewChat(cur)) {
-                DebugLog("Gemini new chat started (title=" . cur . ").")
+            try cur := WinGetTitle(gem.hwnd)
+            if (GeminiTitleIsNewChat(cur))
                 return true
-            }
         }
-        DebugLog("Gemini new-chat click attempt " . A_Index . " didn't confirm yet (title=" . cur . ").")
     }
-    DebugLog("Gemini new-chat click did not confirm a fresh chat; proceeding anyway.")
+    DebugLog("Gemini PWA new-chat click did not confirm a fresh chat (title=" . cur . ").")
     return false
 }
 
@@ -997,13 +1043,14 @@ $!a:: {
     if (kGeminiPasteSuffix != "")
         A_Clipboard := clipUrl . kGeminiPasteSuffix
     VerboseLog("stage:find_gemini")
-    gemHwnd := FindGeminiWindow()
-    if !gemHwnd {
-        DebugLog("Gemini window not found; left URL on clipboard.")
+    gem := FindGeminiWindow()
+    if !gem {
+        DebugLog("Gemini desktop app or Chrome PWA not found; left URL on clipboard.")
         A_Clipboard := clipUrl
         return
     }
-    VerboseLog("stage:activate_gemini hwnd=" . gemHwnd)
+    gemHwnd := gem.hwnd
+    VerboseLog("stage:activate_gemini target=" . gem.target . " hwnd=" . gemHwnd)
     tAct := A_TickCount
     WinActivate(gemHwnd)
     if !WinWaitActive(gemHwnd,, 2) {
@@ -1012,12 +1059,25 @@ $!a:: {
         return
     }
     VerboseLog("stage:gemini_active elapsed=" . (A_TickCount - tAct))
-    ; Start a fresh chat so a previously-refused thread doesn't keep refusing the
-    ; same URL (see kGeminiNewChatEachTime). This also resets the composer to its
-    ; centered new-chat layout, which the pixel scan below already handles.
+    ; Gemini desktop app (Electron): fill the composer and press Send through
+    ; Windows UI Automation. Pixel scanning/posted clicks only fit the Chrome PWA.
+    if (gem.target = "desktop") {
+        result := SendGeminiDesktop(gemHwnd, clipUrl . kGeminiPasteSuffix, kGeminiNewChatEachTime)
+        A_Clipboard := clipUrl
+        if !result.ok {
+            DebugLog("Gemini desktop send failed: " . result.status)
+            TrayTip("Gemini desktop send failed: " . result.status, "YouTube-to-Gemini Helper")
+            return
+        }
+        DebugLog("Sent to Gemini desktop app.")
+        return
+    }
+    ; Chrome PWA fallback. Start a fresh chat so a previously-refused thread doesn't
+    ; keep refusing the same URL (see kGeminiNewChatEachTime). This also resets the
+    ; composer to its centered new-chat layout, which the pixel scan below handles.
     if (kGeminiNewChatEachTime) {
         VerboseLog("stage:new_chat")
-        StartNewGeminiChat(gemHwnd)
+        StartNewGeminiChat(gem)
         Sleep(120)  ; let the fresh-chat layout begin settling before the scan
     }
     ; Real click on the "Ask Gemini" input field. Composer position depends on

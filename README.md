@@ -17,106 +17,66 @@ git config core.hooksPath .githooks
 
 ## Workflow
 
-1. Open **YouTube** in **Google Chrome** (or **Brave**) with this extension enabled.
-2. Point at the **thumbnail** of the video you care about — the extension remembers which video that is.
-3. Press **Alt+A** (with **AutoHotkey v2** and **`copy.ahk`** on Windows). The script briefly brings the YouTube window forward, copies that video's **YouTube URL**, switches to the **Gemini** app, focuses the composer input, pastes a short "summarize" line plus the link, and sends it. Afterward the **clipboard is set back to the plain URL**. The OS mouse cursor never moves — the click is posted directly to the Chromium render widget.
+1. Open YouTube in Brave or Chrome with the extension enabled.
+2. Hover the video thumbnail.
+3. Press **Alt+A**. Windows AutoHotkey copies the hovered URL, sends it with `한국어로 요약해 줘` to the Gemini desktop app, verifies that the app sent it, and restores the clipboard to the plain URL.
 4. **Gemini** replies with a **summary** (and you can follow up in the same chat).
 
-**Why this works:** **Gemini** can use a **YouTube URL** as real video context for summaries and Q&A. Many other assistants only treat links as plain text.
-
-**Implementation note:** `copy.ahk` sends **F24** *inside* the YouTube tab so the extension can copy the URL. F24 is used as the internal AutoHotkey↔extension signal because it has no default browser binding and can't collide with other tools' global hotkeys (e.g. CopyAnkitoChatGPT owns Alt+X system-wide). **Alt+A is the Windows user-facing hotkey.** The extension copies **synchronously** (`execCommand`) so the OS clipboard is ready before AutoHotkey continues; the script also waits for a **Windows clipboard update** before reading the URL, so Gemini should not receive a stale link.
+**Implementation note:** the extension uses F24 as the internal AutoHotkey-to-browser copy signal. **Alt+A is the Windows user-facing hotkey.** The desktop handoff uses Windows UI Automation for Gemini's composer and Send button; it does not rely on the old PWA window geometry.
 
 | Hotkey | Action |
 |--------|--------|
-| **Alt+A (Windows)** | Copy hovered URL from YouTube (Brave) → Gemini (Chrome app) → paste prompt + URL → Enter |
+| **Alt+A (Windows)** | Copy the hovered YouTube URL → Gemini desktop app → paste the Korean summary prompt → send |
 
 ---
 
 ## Requirements
 
-- **Brave** (default in `copy.ahk`) or **Google Chrome** as an alternative for YouTube and this extension.
-- **Windows** + **[AutoHotkey v2](https://www.autohotkey.com/)** + **`copy.ahk`** for global **Alt+A**.
-- **Google Chrome** with **Gemini installed as an app** (window title contains `Gemini`).
+- Windows, AutoHotkey v2, `copy.ahk`, and the Gemini desktop app signed in to your Google account.
+- Reload the AHK script after changes: tray icon → **Reload Script**.
+## 1. Load the YouTube extension
 
-**Script notes:** `copy.ahk` activates **Brave** (`brave.exe`) for the YouTube step; switch to **`chrome.exe`** in `FindBraveWindow` if YouTube lives only in Chrome. Edit **`kGeminiPastePrefix`** at the top of `copy.ahk` to change or clear the text before the URL (`""` = URL only).
+1. Open `brave://extensions` or `chrome://extensions`.
+2. Enable Developer mode, select **Load unpacked**, choose this repository folder, and verify the extension is enabled.
+3. Open YouTube in that browser.
 
-This flow is **Windows-only** as documented above. For **macOS**, use the Hammerspoon port in [Mac/](Mac/) (**Option+Z**). For **Linux** (Ubuntu / GNOME Wayland), use the port in [Linux/](Linux/) (**Alt+A**, through a separate GNOME shortcut).
+## 2. Run AutoHotkey
 
----
+1. Install AutoHotkey v2 and double-click this repository's `copy.ahk`.
+2. Confirm the **H** tray icon appears.
+3. Hover a YouTube thumbnail and press **Alt+A**.
+4. For auto-start, point a Startup shortcut at `AutoHotkey64.exe "<repo path>\copy.ahk"`.
 
-## 1. Load the extension in Google Chrome
+## 3. Use Gemini desktop
 
-1. Download or clone this repository.
-2. Open **Google Chrome** (or **Brave**).
-3. Go to **`chrome://extensions`** (Brave: **`brave://extensions`**).
-4. Turn **Developer mode** on (top right).
-5. Click **Load unpacked** and select this folder (`manifest.json` lives here).
-6. Open [YouTube](https://www.youtube.com) and allow the extension if prompted.
+Install and sign in to the official Gemini Windows app. Keep it running; `copy.ahk` prefers its visible **Gemini** window. If the desktop app is not running, the script falls back to a Gemini Chrome PWA.
 
----
+The desktop route uses Windows UI Automation to find the **Ask Gemini** composer and **Send message** button. Like the PWA route, it replaces any text already in the composer, then sends; failures are reported in `copyurl_log.txt`. The Chrome PWA keeps the existing cursorless click-and-paste route.
 
-## 2. Install AutoHotkey v2 and run `copy.ahk`
+## macOS and Linux
 
-1. Install **AutoHotkey v2** from [autohotkey.com](https://www.autohotkey.com/).
-2. Double-click **`copy.ahk`** in this repo.
-3. Confirm the **H** tray icon appears.
-4. **Optional — run at sign-in:** **Win+R** → **`shell:startup`** → Enter, then create a
-   **shortcut** whose target is `AutoHotkey64.exe "<path to this repo>\copy.ahk"` (point it at
-   the repo copy so login runs the version you edit — no need to copy the file into Startup).
-
-The current Windows shortcut is **Alt+A**. Reload the AutoHotkey script (tray icon → **Reload Script**) after editing `copy.ahk` or switching to this binding.
-
-To **regenerate** the demo GIF: `python scripts/generate_workflow_demo_gif.py` (requires `pillow` and `imageio`).
-
----
-
-## 3. Install Gemini as a Chrome app
-
-**Alt+A** expects a Chrome window whose title includes **`Gemini`**. The installed **PWA** is most reliable.
-
-1. Open **Google Chrome**.
-2. Go to [gemini.google.com](https://gemini.google.com) and sign in.
-3. Install via the address bar **install** icon, or **⋮** → **Save and share** → **Install Gemini** (labels vary).
-4. Keep that app window available when you use **Alt+A**.
-
----
-
-## Usage
-
-1. **YouTube** open in **Chrome** or **Brave**; pointer over a thumbnail.
-2. **Alt+A** — full flow above.
-
-If several Gemini windows are open, AutoHotkey uses the first match; one window is simplest.
+macOS uses **Option+Z** with [Mac/](Mac/). Linux uses a separate GNOME **Alt+A** shortcut with [Linux/](Linux/).
 
 
 <!-- AUTO:RECENT-ACTIVITY:BEGIN -->
 <!-- This block is regenerated by .githooks/pre-commit on every commit.
      Do not edit by hand — your changes will be overwritten. -->
 
-**Last updated:** `2026-10-11T20:57:16Z`
+**Last updated:** `2026-10-11T22:09:03Z`
 
 **Recent commits (last 5 on HEAD):**
 
+- `7aa455a` feat: switch Windows hotkey to Alt+A _(72 minutes ago)_
 - `e32ecb6` docs(linux): rename hotkey Alt+Z to Alt+A; bump extension to 1.2.9 _(3 weeks ago)_
 - `4bb947a` chore: rename project to YT-to-Gemini Summarizer Helper _(7 weeks ago)_
 - `eb4768e` docs: reflect linux-port-pr merge (3-platform support) + wire pre-commit hook _(8 weeks ago)_
 - `a3eece5` Merge linux-port-pr: Linux (Ubuntu/GNOME Wayland) port + macOS Gemini paste/submit hardening + native Gemini.app _(8 weeks ago)_
-- `c063ba5` feat(mac): switch Gemini target from Safari-WebApp PWA to native Gemini.app _(3 months ago)_
 
 **Files in the pending commit:**
 
 - `CLAUDE.md`
-- `Linux/README.md`
-- `Linux/copyurl.sh`
-- `Mac/README.md`
 - `README.md`
 - `copy.ahk`
-- `docs/project-build-presentation.html`
 - `docs/troubleshooting.md`
-- `docs/youtube-to-gemini-helper-explainer.html`
-- `package.json`
-- `scripts/chrome_test.ahk`
-- `scripts/generate_workflow_demo_gif.py`
-- `scripts/run_tests.sh`
-- `tests/e2e/run_full_system.mjs`
+- `scripts/send_gemini_desktop.ps1`
 <!-- AUTO:RECENT-ACTIVITY:END -->

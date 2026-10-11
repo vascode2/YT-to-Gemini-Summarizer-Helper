@@ -33,12 +33,12 @@ Optional validate before reloading:
 > `g:\...\copy.ahk` anywhere, they are stale.
 
 ## What this project does
-Hover a YouTube thumbnail in Brave/Chrome → press **Alt+A** (Windows user-facing hotkey) → AutoHotkey activates the YouTube window, sends **F24** inside the tab as the internal extension trigger (F24 chosen to avoid collision with other tools' global hotkeys, e.g. CopyAnkitoChatGPT owns Alt+X), the extension copies the hovered video's URL to the OS clipboard, then AHK switches to the Gemini Chrome app and pastes a "Summarize this YouTube video:" prompt + URL and presses Enter.
+Hover a YouTube thumbnail in Brave/Chrome → press **Alt+A** on Windows → AutoHotkey triggers the extension with F24, reads the copied YouTube URL, then sends the URL plus Korean summary suffix to the preferred Gemini desktop app. Chrome Gemini PWA remains a fallback.
 
-## Architecture (3 cooperating processes)
-1. **Browser content script** ([content.js](content.js)) — tracks hovered video, listens for Alt+X, writes URL to clipboard via synchronous `document.execCommand("copy")` (with async `navigator.clipboard.writeText` fallback).
-2. **AutoHotkey v2 script** ([copy.ahk](copy.ahk)) — global Windows Alt+A handler. Activates Brave, syncs hover (PostMessage WM_MOUSEMOVE jitter), sends F24, polls `GetClipboardSequenceNumber` until it changes, then drives Gemini paste.
-3. **Gemini Chrome PWA** — receives a synthetic "New chat" click (left-rail pencil), then a composer click + Ctrl+A/Ctrl+V/Enter. The new-chat click (since v2026-06-25.7) starts a fresh thread each time so a previously-refused conversation doesn't keep refusing the same URL.
+## Windows / macOS / Linux components
+1. **Browser extension** ([content.js](content.js)) — tracks the hovered video and writes its URL to the clipboard when it receives F24.
+2. **Windows AHK v2 script** ([copy.ahk](copy.ahk)) — handles Alt+A, confirms clipboard change, then uses Windows UI Automation to fill Gemini desktop's composer and invoke Send. It selects the Chrome PWA flow only when the desktop app is absent.
+3. **Gemini desktop app** — receives the URL and `한국어로 요약해 줘`; the user can continue the conversation in the app.
 
 No background script, no native messaging, no host permissions beyond the YouTube content-script match.
 
@@ -82,6 +82,7 @@ No background script, no native messaging, no host permissions beyond the YouTub
 | 2026-08-13 | **Merged `linux-port-pr` (22 commits) into `master` and pushed** (merge commit `a3eece5`). One conflict, `manifest.json`: master's Phase-1 bump (`c74da9e`) had `version: 1.1.0` + `permissions: ["clipboardWrite"]`; `linux-port-pr` carried `1.2.8` + `permissions: ["clipboardWrite", "storage"]` + the new `gemini.google.com` content-script entry (the `storage` permission + Gemini match are required by the new `gemini.js` Linux in-browser paste handoff). Took the linux-port-pr side (newer version, cross-platform description, `storage` perm + Gemini match) — the master bump was a strict subset. `content.js` auto-merged cleanly; verified no stray conflict markers, `node --check` on `content.js` + `gemini.js`. Deleted the now-fully-merged remote `origin/linux-port-pr`. | Consolidates all platform work (Linux Ubuntu/GNOME Wayland port + macOS native `Gemini.app` + AX send-button submit + AXValue paste + e2e tests) onto `master`. Note: the sibling `origin/linux-port` branch is **not** git-merged (13 distinct commits, a separate earlier history that was reorganized into the PR branch) but its tree is a strict *older* subset of master (`copyurl.sh` `CONFIG_VERSION v4 2026-06-11`; master is net +4519 lines over it) — it's the superseded early Linux dev line, retained pending an explicit delete decision. |
 
 | 2026-10-11 | Windows shortcut changed from Alt+Z to Alt+A (`$!a::`). Updated Windows workflow docs and AHK test harness; Linux keeps its separately configured GNOME Alt+A, macOS stays Option+Z. | User requested Alt+A on Windows. Reload `copy.ahk` to activate the new binding. |
+| 2026-10-11 | Windows Alt+A now targets the **Gemini desktop app** (`Gemini.exe`, Electron) first, Chrome PWA second. Desktop sends go through `scripts/send_gemini_desktop.ps1` (Windows UI Automation: composer `ValuePattern.SetValue` → verify → invoke **Send message** → wait for composer to clear); `copy.ahk` calls it via `kGeminiUiHelper` and logs `Gemini UIA helper exit=… status=…`. Existing composer text is replaced (same as the PWA Ctrl+A/Ctrl+V path). PWA keeps the pixel-scan/posted-click path. | User switched to the desktop app; the PWA path (render-widget pixel scan + posted clicks) does not apply to its window. UIA exposes the composer and Send button by name, so no coordinates/DPI calibration is needed. A first draft-preserving guard blocked every send when a stray character sat in the composer, so it was dropped. |
 ## Diagnostic flags
 - **Extension**: set `localStorage.__copyurlDebug = "1"` on a youtube.com page (persisted). Enables ring buffer at `window.__copyurlLog` (last 200 events) and `console.debug("[CopyURL]", ...)` output. Title beacon is **always on** (cheap, invisible suffix using zero-width char + tag).
 - **AutoHotkey**: `kVerboseLog := true` at top of [copy.ahk](copy.ahk) — adds per-stage timing + pre/post title in the log.
@@ -96,7 +97,7 @@ After every F24 keydown the extension processes, it appends ` ​[CU:STATE]` (ze
 - Composer Y is found via native `PixelSearch` (BitBlt) instead of a per-pixel `PixelGetColor` loop — scan dropped from ~11 s to <200 ms on the user's display.
 - `#MaxThreadsBuffer true` queues a second Windows Alt+A press while the first handler is still running.
 ## Next steps (resume here)
-1. **Windows**: reload [copy.ahk](copy.ahk) (tray → Reload Script) to activate Alt+A. Reload the extension in Brave/Chrome (`brave://extensions` → reload) if the merged `gemini.js` and `storage` permission are not active.
+1. **Windows**: reload [copy.ahk](copy.ahk) from the tray to use Alt+A with the Gemini desktop app. Keep the app running; the script falls back to the Chrome PWA only if desktop Gemini is not found.
 2. **macOS**: `diff Mac/hammerspoon/init.lua ~/.hammerspoon/init.lua` — the live file is known to silently diverge (2026-07-26/27 entries); re-sync the CopyURL section if it has regressed. Gemini target is now the native `com.google.GeminiMacOS` app.
 3. **Linux**: see [Linux/README.md](Linux/README.md) for the Ubuntu/GNOME Wayland setup (`ydotool` + `wl-clipboard` + Activate-Window-By-Title GNOME extension). Requires Gemini as a Brave app in the **same profile** as the extension (the paste handoff goes through `chrome.storage`).
 4. Move to Phase 2 (stress harness) — the deferred original plan.
@@ -119,30 +120,21 @@ After every F24 keydown the extension processes, it appends ` ​[CU:STATE]` (ze
 <!-- This block is regenerated by .githooks/pre-commit on every commit.
      Do not edit by hand — your changes will be overwritten. -->
 
-**Last updated:** `2026-10-11T20:57:16Z`
+**Last updated:** `2026-10-11T22:09:03Z`
 
 **Recent commits (last 5 on HEAD):**
 
+- `7aa455a` feat: switch Windows hotkey to Alt+A _(72 minutes ago)_
 - `e32ecb6` docs(linux): rename hotkey Alt+Z to Alt+A; bump extension to 1.2.9 _(3 weeks ago)_
 - `4bb947a` chore: rename project to YT-to-Gemini Summarizer Helper _(7 weeks ago)_
 - `eb4768e` docs: reflect linux-port-pr merge (3-platform support) + wire pre-commit hook _(8 weeks ago)_
 - `a3eece5` Merge linux-port-pr: Linux (Ubuntu/GNOME Wayland) port + macOS Gemini paste/submit hardening + native Gemini.app _(8 weeks ago)_
-- `c063ba5` feat(mac): switch Gemini target from Safari-WebApp PWA to native Gemini.app _(3 months ago)_
 
 **Files in the pending commit:**
 
 - `CLAUDE.md`
-- `Linux/README.md`
-- `Linux/copyurl.sh`
-- `Mac/README.md`
 - `README.md`
 - `copy.ahk`
-- `docs/project-build-presentation.html`
 - `docs/troubleshooting.md`
-- `docs/youtube-to-gemini-helper-explainer.html`
-- `package.json`
-- `scripts/chrome_test.ahk`
-- `scripts/generate_workflow_demo_gif.py`
-- `scripts/run_tests.sh`
-- `tests/e2e/run_full_system.mjs`
+- `scripts/send_gemini_desktop.ps1`
 <!-- AUTO:RECENT-ACTIVITY:END -->
