@@ -58,7 +58,7 @@ def scene_title() -> Image.Image:
     )
     d.text(
         (W // 2, 255),
-        "Windows · Alt+Z · AutoHotkey",
+        "Windows · Alt+A · AutoHotkey",
         fill=RED_DIM,
         font=FONT_SM,
         anchor="mm",

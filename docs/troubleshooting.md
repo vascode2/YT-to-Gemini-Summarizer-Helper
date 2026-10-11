@@ -1,7 +1,7 @@
-# Troubleshooting CopyYoutubeURL
+# Troubleshooting YouTube-to-Gemini Helper
 
 ## Quick repro
-1. Open YouTube in Brave; hover a thumbnail; press **Alt+Z**.
+1. Open YouTube in Brave; hover a thumbnail; press **Alt+A** (Windows).
 2. Watch [../copyurl_log.txt](../copyurl_log.txt) tail and the extension's DevTools console (Inspect on the youtube.com tab).
 
 ## Enable extension diagnostics
@@ -10,7 +10,7 @@ In the YouTube tab DevTools console:
 localStorage.__copyurlDebug = "1";
 location.reload();
 ```
-Then inspect after each Alt+Z:
+Then inspect after each Windows Alt+A:
 ```js
 window.__copyurlLog   // ring buffer of last 200 events
 ```
@@ -20,7 +20,7 @@ Disable with `localStorage.removeItem("__copyurlDebug")`.
 Edit top of [../copy.ahk](../copy.ahk): `kVerboseLog := true`. Tray → Reload Script.
 
 ## Title beacon (always on)
-After every F24 the extension processes (F24 is AHK's internal trigger — Alt+Z is the user-facing hotkey), the page title gets a transient zero-width-space + tag suffix:
+After every F24 the extension processes (F24 is AHK's internal trigger — Windows Alt+A is the user-facing hotkey), the page title gets a transient zero-width-space + tag suffix:
 
 | Beacon | Meaning |
 |---|---|
@@ -52,7 +52,7 @@ AHK reads the title right after Alt+X and logs it.
 1. Reload extension (`brave://extensions` → reload).
 2. Reload AHK (tray → Reload Script).
 3. Refresh YouTube tab.
-4. Hover thumbnail, retry Alt+Z.
+4. Hover thumbnail, retry Windows Alt+A.
 
 ## Gemini composer focus (cursorless click)
 The Gemini click is sent via `PostClickAtScreen` — it converts the screen coord to render-widget client coords with `ScreenToClient` and posts `WM_MOUSEMOVE` + `WM_LBUTTONDOWN/UP` to the largest `Chrome_RenderWidgetHostHWND`. The OS cursor doesn't move.
@@ -117,18 +117,18 @@ the full setup.
 ```sh
 tail -f ~/.local/state/copyurl/copyurl_log.txt
 ```
-Every key step (`Alt+Z fired (version=...)`, `activate_window_by_title(...)`,
+Every Linux key step (`Alt+A fired (version=...)`, `activate_window_by_title(...)`,
 `copy attempt N`, `clipboard changed -> ...`, `done; sent url=...`) is logged.
 
 ### Verify the live build
 Top of `copyurl.sh` defines `CONFIG_VERSION="vN <date> <tag>"`, written to the
-log on every run as `Alt+Z fired (version=vN ...)`. GNOME runs the script fresh
+log on every run as `Alt+A fired (version=vN ...)`. GNOME runs the script fresh
 on each keypress, so there is no reload step — editing the file is enough.
 
 ### Works even when Brave is NOT focused
 As of `v5` (`linux-activate-brave-before-trigger`), `copyurl.sh` raises the
 Brave/YouTube window via `activate_youtube` **before** typing the trigger, so
-Alt+Z works while you are only *hovering* a thumbnail with another window
+Alt+A works while you are only *hovering* a thumbnail with another window
 focused. Activation is non-fatal: if it fails the script still types into the
 focused window (old behaviour). The window is matched by the title substring
 `COPYURL_YOUTUBE_NEEDLE` (default `YouTube`).
@@ -137,7 +137,7 @@ focused window (old behaviour). The window is matched by the title substring
 | Log signature | Likely cause | Fix |
 |---|---|---|
 | `bash: .../copyurl.sh: Permission denied` (in `journalctl --user -u org.gnome.SettingsDaemon.MediaKeys`) | Script lost its `+x` bit (Insync/Google Drive strips it) | `chmod +x Linux/copyurl.sh`; bind the GNOME shortcut to `bash "<abs path>"` so it survives future stripping. |
-| Alt+Z does nothing, no new log lines at all | GNOME dropped the key grab (often after suspend/resume) | `systemctl --user restart org.gnome.SettingsDaemon.MediaKeys.target`. |
+| Alt+A does nothing, no new log lines at all | GNOME dropped the key grab (often after suspend/resume) | `systemctl --user restart org.gnome.SettingsDaemon.MediaKeys.target`. |
 | `WARN: could not activate YouTube/Brave window` then `URL copy failed` | No window title contains `YouTube`, or the *Activate Window By Title* extension is off | Make sure a YouTube tab is frontmost in Brave and the extension is enabled; override with `COPYURL_YOUTUBE_NEEDLE`. |
 | `copy attempt N: timed out` (×2) | Trigger landed in the wrong window, or `content.js` had no hovered video | Confirm Brave activation worked (see the `activate_window_by_title` log line); set `localStorage.__copyurlDebug='1'` and inspect `window.__copyurlLog`. |
 | URL copied but nothing pasted into Gemini | Gemini is in a **different browser/profile** than the extension | `chrome.storage` is per browser+profile — run Gemini as a Brave app in the **same** profile, then reload the extension. |
@@ -147,7 +147,7 @@ focused window (old behaviour). The window is matched by the title substring
 - **`ydotool type "]"` is the only reliable synthetic input** on this Wayland
   setup — `ydotool key <code>` mangles keycodes and can't send F24/Ctrl+V/Enter.
   So `]` is a pure trigger and the paste happens in the browser via `gemini.js`.
-- **Window raising before the trigger** is what makes Alt+Z work unfocused; the
+- **Window raising before the trigger** is what makes Linux Alt+A work unfocused; the
   mouse is never moved, so `content.js` still resolves the hovered thumbnail.
 - **Automated coverage:** [../tests/e2e/run_full_system.mjs](../tests/e2e/run_full_system.mjs)
   runs the genuine `copyurl.sh` + `ydotool` + `wl-clipboard` against a real Brave
@@ -157,20 +157,30 @@ focused window (old behaviour). The window is matched by the title substring
 <!-- This block is regenerated by .githooks/pre-commit on every commit.
      Do not edit by hand — your changes will be overwritten. -->
 
-**Last updated:** `2026-09-18T21:38:00Z`
+**Last updated:** `2026-10-11T20:57:16Z`
 
 **Recent commits (last 5 on HEAD):**
 
-- `4bb947a` chore: rename project to YT-to-Gemini Summarizer Helper _(4 weeks ago)_
-- `eb4768e` docs: reflect linux-port-pr merge (3-platform support) + wire pre-commit hook _(5 weeks ago)_
-- `a3eece5` Merge linux-port-pr: Linux (Ubuntu/GNOME Wayland) port + macOS Gemini paste/submit hardening + native Gemini.app _(5 weeks ago)_
-- `c063ba5` feat(mac): switch Gemini target from Safari-WebApp PWA to native Gemini.app _(8 weeks ago)_
-- `2ed4bd1` docs: record 2026-07-26 finding — live macOS init.lua diverged from repo, lost keyStroke targeting + Gemini paste/submit hardening fixes _(8 weeks ago)_
+- `e32ecb6` docs(linux): rename hotkey Alt+Z to Alt+A; bump extension to 1.2.9 _(3 weeks ago)_
+- `4bb947a` chore: rename project to YT-to-Gemini Summarizer Helper _(7 weeks ago)_
+- `eb4768e` docs: reflect linux-port-pr merge (3-platform support) + wire pre-commit hook _(8 weeks ago)_
+- `a3eece5` Merge linux-port-pr: Linux (Ubuntu/GNOME Wayland) port + macOS Gemini paste/submit hardening + native Gemini.app _(8 weeks ago)_
+- `c063ba5` feat(mac): switch Gemini target from Safari-WebApp PWA to native Gemini.app _(3 months ago)_
 
 **Files in the pending commit:**
 
 - `CLAUDE.md`
-- `content.js`
 - `Linux/README.md`
-- `manifest.json`
+- `Linux/copyurl.sh`
+- `Mac/README.md`
+- `README.md`
+- `copy.ahk`
+- `docs/project-build-presentation.html`
+- `docs/troubleshooting.md`
+- `docs/youtube-to-gemini-helper-explainer.html`
+- `package.json`
+- `scripts/chrome_test.ahk`
+- `scripts/generate_workflow_demo_gif.py`
+- `scripts/run_tests.sh`
+- `tests/e2e/run_full_system.mjs`
 <!-- AUTO:RECENT-ACTIVITY:END -->

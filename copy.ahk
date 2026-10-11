@@ -1,7 +1,7 @@
 #Requires AutoHotkey v2.0
 
 ; =============================================================================
-;  CopyYoutubeURL  —  Alt+Z: copy hovered YouTube video URL, then paste to Gemini
+;  YouTube-to-Gemini Helper  —  Alt+A: copy hovered YouTube video URL, then paste to Gemini
 ; -----------------------------------------------------------------------------
 ;  VERSION: 2026-06-25.8
 ;  CHANGES: Disabled per-paste new-chat (kGeminiNewChatEachTime := false) by user
@@ -14,12 +14,12 @@
 ;           and restored kToastDwellMs so the content-script bubble shows again.
 ;  HOW TO CHECK WHICH VERSION IS LIVE:
 ;    1. This line (open the file in a text editor).
-;    2. Hover the AHK tray icon — tooltip shows "CopyURL <version>".
+;    2. Hover the AHK tray icon — tooltip shows "YouTube-to-Gemini Helper <version>".
 ;    3. copyurl_log.txt — a "Script loaded. version=..." line is written on (re)load.
 ; =============================================================================
 kScriptVersion := "2026-06-25.8"
 
-; Buffer one extra Alt+Z press while a handler is running (otherwise it's silently dropped
+; Buffer one extra Alt+A press while a handler is running (otherwise it's silently dropped
 ; on a slow Gemini activation, which makes consecutive copies look like "the wrong URL pasted").
 #MaxThreadsBuffer true
 
@@ -29,7 +29,7 @@ kGeminiInputYFrac := 0.92
 ; On a brand-new Gemini chat the composer is vertically centered (~0.54), not pinned to the bottom.
 kGeminiNewChatYFrac := 0.54
 
-; Start a BRAND-NEW Gemini chat before every paste. Without this, each Alt+Z
+; Start a BRAND-NEW Gemini chat before every paste. Without this, each Alt+A
 ; appends to whatever chat is already open; once Gemini refuses a video in that
 ; thread ("현재 시스템 제한... 영상을 직접 요약할 수 없습니다"), the refusal stays in
 ; the conversation context and it keeps refusing the SAME url — which is exactly
@@ -46,7 +46,7 @@ kGeminiNewChatEachTime := false
 kGeminiNewChatBtnX := 30
 kGeminiNewChatBtnY := 102
 
-; Text appended AFTER the URL in Gemini (Alt+Z). "" = URL only. Clipboard is restored to the plain URL after send.
+; Text appended AFTER the URL in Gemini (Alt+A). "" = URL only. Clipboard is restored to the plain URL after send.
 kGeminiPasteSuffix := " 한국어로 요약해 줘"
 
 ; Set true to append diagnostic lines to copyurl_log.txt next to this script.
@@ -88,7 +88,7 @@ kAhkToastMs := 1300
 
 ; Surface the running version so you can confirm which build is live without
 ; opening the file: tray-icon tooltip + a log line on every (re)load.
-A_IconTip := "CopyURL " . kScriptVersion
+A_IconTip := "YouTube-to-Gemini Helper " . kScriptVersion
 DebugLog("Script loaded. version=" . kScriptVersion)
 
 ; File where we cache the exe of the most recent successful copy. Tried first
@@ -223,7 +223,7 @@ kYouTubeBrowsers := ["brave.exe", "chrome.exe"]
 
 /**
  * Return an ordered list of candidate browser windows (most-likely first).
- * Replaces the old FindYouTubeWindow which returned only one. The Alt+Z
+ * Replaces the old FindYouTubeWindow which returned only one. The Alt+A
  * handler walks this list and tries each in turn, so e.g. if Brave is more
  * recently active but the extension isn't installed there, we automatically
  * fall through to Chrome's YouTube tab.
@@ -325,10 +325,10 @@ FindYouTubeWindow() {
  * If the current foreground window is a YouTube tab in one of our browsers,
  * return { hwnd, exe }; otherwise 0.
  *
- * Used by the Alt+Z "fast path": when YouTube is already in front, we copy the
+ * Used by the Alt+A "fast path": when YouTube is already in front, we copy the
  * thumbnail under the cursor immediately — before any window activation, mouse
  * jitter, or KeyWait. That captures the video the user was hovering at the exact
- * instant they pressed Alt+Z (so moving the mouse afterward no longer changes
+ * instant they pressed Alt+A (so moving the mouse afterward no longer changes
  * what gets copied) and lets the content-script "Copied!" toast render on the
  * still-focused YouTube tab.
  */
@@ -688,7 +688,7 @@ SyncChromiumHoverThorough(topHwnd) {
 /**
  * Like SyncChromiumHoverThorough but at an explicit SCREEN point instead of the
  * live cursor. Used by the slow/activation path so content.js's hoveredVideoUrl
- * is refreshed at the position the cursor was in WHEN Alt+Z WAS PRESSED — not
+ * is refreshed at the position the cursor was in WHEN Alt+A WAS PRESSED — not
  * wherever the user has since moved it. PostMessage-only: the real OS cursor is
  * left where the user moved it (we don't fight their hand).
  */
@@ -836,9 +836,9 @@ TryCopyOnce(timeoutMs, hwnd := 0) {
     }
 }
 
-$!z:: {
-    DebugLog("--- Alt+Z pressed ---")
-    ; Capture the cursor position the instant Alt+Z is pressed, before the user
+$!a:: {
+    DebugLog("--- Alt+A pressed ---")
+    ; Capture the cursor position the instant Alt+A is pressed, before the user
     ; can move it. The slow/activation path syncs the YouTube hover at THIS point
     ; (not the live cursor) so moving the mouse afterward doesn't change which
     ; video gets copied. The fast path doesn't need it (it copies immediately).
@@ -854,7 +854,7 @@ $!z:: {
     ; If a YouTube tab is already in front, copy the hovered video RIGHT NOW,
     ; before doing anything that takes time (KeyWait / WinActivate / mouse
     ; jitter). This pins the copy to the thumbnail under the cursor at the
-    ; moment Alt+Z was pressed, so the user can move the mouse immediately
+    ; moment Alt+A was pressed, so the user can move the mouse immediately
     ; afterward without changing what gets copied. It also lets the "Copied!"
     ; toast appear on the focused YouTube tab.
     ;
@@ -894,7 +894,7 @@ $!z:: {
         candidates := FindYouTubeCandidates()
         if (candidates.Length = 0) {
             DebugLog("No YouTube-capable browser window found (Brave/Chrome).")
-            TrayTip("YouTube window not found in Brave or Chrome.", "CopyURL")
+            TrayTip("YouTube window not found in Brave or Chrome.", "YouTube-to-Gemini Helper")
             return
         }
         DebugLog("Candidates: " . candidates.Length)
@@ -921,7 +921,7 @@ $!z:: {
                 attempt := A_Index
                 ; Refresh the YouTube hover at the PRESS-TIME cursor position
                 ; (origX,origY) — NOT the live cursor. Otherwise, if the user
-                ; moved the mouse after Alt+Z, content.js would copy the video
+                ; moved the mouse after Windows Alt+A, content.js would copy the video
                 ; they moved ONTO instead of the one they started on. We do NOT
                 ; move the real OS cursor here, so the user's hand isn't fought.
                 SyncChromiumHoverAtScreenPoint(hwnd, origX, origY)
@@ -954,7 +954,7 @@ $!z:: {
     }
 
     if !success {
-        TrayTip("YouTube copy timed out across all browsers — hover a thumbnail and try again.", "CopyURL")
+        TrayTip("YouTube copy timed out across all browsers — hover a thumbnail and try again.", "YouTube-to-Gemini Helper")
         return
     }
 
@@ -966,7 +966,7 @@ $!z:: {
     KeyWait("RAlt", "T0.4")
 
     ; Reliable, browser-independent "Copied!" confirmation drawn by AHK itself,
-    ; near where the cursor was when Alt+Z was pressed.
+    ; near where the cursor was when Alt+A was pressed.
     if (kAhkToast)
         ShowCopiedToast("Copied!", origX, origY)
 
@@ -990,7 +990,7 @@ $!z:: {
     }
     if !ClipboardTextLooksLikeYouTubeUrl(clipUrl) {
         DebugLog("Clipboard not a YouTube URL: " . SubStr(clipUrl, 1, 120))
-        TrayTip("Clipboard does not look like a YouTube URL — copy may have failed.", "CopyURL")
+        TrayTip("Clipboard does not look like a YouTube URL — copy may have failed.", "YouTube-to-Gemini Helper")
         return
     }
     DebugLog("Got URL: " . clipUrl)

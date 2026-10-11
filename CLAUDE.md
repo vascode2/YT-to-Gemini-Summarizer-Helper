@@ -1,4 +1,4 @@
-# CLAUDE.md — CopyYoutubeURL handoff
+# CLAUDE.md — YouTube-to-Gemini Helper handoff
 
 > Living handoff doc. Update at every phase boundary. Future agent sessions should read this first.
 
@@ -6,14 +6,14 @@
 As of 2026-07-14 the project lives in a **local Git clone** and Startup launches it
 **directly** — there is **no more mirror/copy step**:
 
-- **Authoritative working copy (edit here):** `C:\Users\Yoon\Projects\CopyYoutubeURL\copy.ahk`
+- **Authoritative working copy (edit here):** `C:\Users\Yoon\Projects\YouTube-to-Gemini-Helper\copy.ahk`
 - **How it starts at login:** `...\Startup\copy.ahk.lnk` (a shortcut) runs
-  `AutoHotkey64.exe "C:\Users\Yoon\Projects\CopyYoutubeURL\copy.ahk"`.
+  `AutoHotkey64.exe "C:\Users\Yoon\Projects\YouTube-to-Gemini-Helper\copy.ahk"`.
   There is **no raw `copy.ahk` in the Startup folder anymore** (the old one was
   archived as `Startup\copy.ahk.pre-migration-backup`).
 - **Running log:** `copyurl_log.txt` now sits **next to the clone's copy.ahk**
   (`A_ScriptDir` = the clone). It is **gitignored**, so it never dirties the repo.
-  Read it from `C:\Users\Yoon\Projects\CopyYoutubeURL\copyurl_log.txt` when diagnosing.
+  Read it from `C:\Users\Yoon\Projects\YouTube-to-Gemini-Helper\copyurl_log.txt` when diagnosing.
 
 **Edit loop (no copying):** edit `copy.ahk` in the clone → tray icon → **Reload Script**
 (or `/validate` first). That's it.
@@ -22,22 +22,22 @@ Optional validate before reloading:
 
 ```powershell
 & "C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe" /ErrorStdOut /validate `
-  "C:\Users\Yoon\Projects\CopyYoutubeURL\copy.ahk"
+  "C:\Users\Yoon\Projects\YouTube-to-Gemini-Helper\copy.ahk"
 ```
 
 > Historical note: this repo used to run from Google Drive
-> (`G:\My Drive\Projects\CopyYoutubeURL`) and required a validate → copy-to-Startup →
+> (`G:\My Drive\Projects\YouTube-to-Gemini-Helper`) and required a validate → copy-to-Startup →
 > SHA256 hash-check mirror ritual. That folder's `.git` became corrupted, so the
 > project was re-cloned fresh from GitHub into `C:\Users\Yoon\Projects` and the
 > Drive copy retired (renamed `..._backup`). If you see references to `My Drive` /
 > `g:\...\copy.ahk` anywhere, they are stale.
 
 ## What this project does
-Hover a YouTube thumbnail in Brave/Chrome → press **Alt+Z** (only user-facing hotkey) → AutoHotkey activates the YouTube window, sends **F24** inside the tab as the internal extension trigger (F24 chosen to avoid collision with other tools' global hotkeys, e.g. CopyAnkitoChatGPT owns Alt+X), the extension copies the hovered video's URL to the OS clipboard, then AHK switches to the Gemini Chrome app and pastes a "Summarize this YouTube video:" prompt + URL and presses Enter.
+Hover a YouTube thumbnail in Brave/Chrome → press **Alt+A** (Windows user-facing hotkey) → AutoHotkey activates the YouTube window, sends **F24** inside the tab as the internal extension trigger (F24 chosen to avoid collision with other tools' global hotkeys, e.g. CopyAnkitoChatGPT owns Alt+X), the extension copies the hovered video's URL to the OS clipboard, then AHK switches to the Gemini Chrome app and pastes a "Summarize this YouTube video:" prompt + URL and presses Enter.
 
 ## Architecture (3 cooperating processes)
 1. **Browser content script** ([content.js](content.js)) — tracks hovered video, listens for Alt+X, writes URL to clipboard via synchronous `document.execCommand("copy")` (with async `navigator.clipboard.writeText` fallback).
-2. **AutoHotkey v2 script** ([copy.ahk](copy.ahk)) — global Alt+Z handler. Activates Brave, syncs hover (PostMessage WM_MOUSEMOVE jitter), sends Alt+X, polls `GetClipboardSequenceNumber` until it changes, then drives Gemini paste.
+2. **AutoHotkey v2 script** ([copy.ahk](copy.ahk)) — global Windows Alt+A handler. Activates Brave, syncs hover (PostMessage WM_MOUSEMOVE jitter), sends F24, polls `GetClipboardSequenceNumber` until it changes, then drives Gemini paste.
 3. **Gemini Chrome PWA** — receives a synthetic "New chat" click (left-rail pencil), then a composer click + Ctrl+A/Ctrl+V/Enter. The new-chat click (since v2026-06-25.7) starts a fresh thread each time so a previously-refused conversation doesn't keep refusing the same URL.
 
 No background script, no native messaging, no host permissions beyond the YouTube content-script match.
@@ -81,6 +81,7 @@ No background script, no native messaging, no host permissions beyond the YouTub
 | 2026-07-27 | **Switched macOS Gemini target from the Safari Web App (PWA) to the official native Gemini macOS app** (`com.google.GeminiMacOS`, installed from https://gemini.google/mac/, both `/Applications/Gemini.app` and `~/Applications/Gemini.app` existed — the PWA and native app coexist as separate bundle IDs, no conflict). `geminiBundleId` in `Mac/hammerspoon/init.lua` updated; old PWA ID kept commented for rollback. Investigated the native app's live accessibility tree via a temporary `hs.urlevent`-triggered AX-dump handler (composer filled via direct `AXValue` set, then re-dumped to reveal the send button) rather than guessing: confirmed it embeds its chat UI in a **WKWebView** (`CanvasWKWebView` string found in the binary), so the existing AX-driven composer/paste/submit architecture carries over — only label/identifier strings differ. Native app's composer is `AXTextArea desc="Ask Gemini"` (already matched by the existing `:find("gemini")` check, no change needed); its Send button is `AXButton id="send_button" desc="Submit"` (**did not** match the PWA's `desc=="Send message"` check — this was the one real code change: `pressGeminiSendButton`/`isGeminiSendEnabled` now also match `AXIdentifier=="send_button"` or `desc/title=="Submit"`, alongside the old PWA strings so both remain supported); its "generating" indicator is `AXButton id="stop_button" desc="Stop response"` (already matched by the existing `"stop response"` substring check, `AXIdentifier=="stop_button"` added anyway for robustness). **Also re-discovered the same live-file divergence pattern as 2026-07-26**: `~/.hammerspoon/init.lua` (CONFIG_VERSION v43) had *again* regressed to pre-2026-07-17 Gemini logic (missing `pressGeminiSendButton`/`isGeminiSendEnabled`/`isGeminiGenerating`, old `pasteAndSubmitToGemini(geminiApp)` signature without `expectedUrl`, `hs.eventtap.keyStroke({}, "]", 0)` missing the `ytApp` 4th arg) — this had clearly reverted again sometime after the 2026-07-26 fix, independent of this session's changes. Fully re-synced by replacing the entire CopyURL section (lines 1 through the `copyurl-*` url-event bindings) in the live file with the updated repo content, byte-for-byte except `CONFIG_VERSION`, while leaving all unrelated live-only automation (zoom, fixdisplays, layout-memory, uBar nudge, English-study `dofile`) untouched; a full backup was saved as `~/.hammerspoon/init.lua.bak_before_gemini_switch`. Verified via `open "hammerspoon://copyurl-test-paste"` (bypasses the YouTube hover/copy step, exercises only the Gemini paste+submit): log showed `frontmost before paste: Gemini` → `paste: AXValue set ok len=72` → `paste verify: landed=true urlMatch=true sendEnabled=true` → `send-button: AXPress ok=true` → `submit confirmed empty composer on attempt 1` — full success against the native app. | User wanted to stop relying on the thin Safari-WebApp wrapper and use the officially-supported native Gemini app instead, but asked to compare the two installs and investigate the native app's structure *before* committing to any code changes, given the AX-tree-dependent nature of this integration. Investigating via a live, disposable `hs.urlevent` debug handler (rather than reading Apple/Google docs, which don't expose AX internals) was the only way to get ground truth on the exact identifiers/labels Send/Stop buttons use — guessing wrong here would have silently broken submission (composer fills fine via AXValue regardless of app, so a naive test could look like partial success while never actually sending). The recurrence of the live-file divergence (2nd time in ~24h) confirms the 2026-07-26 entry's takeaway holds: this is a structural risk of the live file being real-not-symlinked and shared with unrelated automation, not a one-off fluke — **future sessions should proactively diff `Mac/hammerspoon/init.lua` vs `~/.hammerspoon/init.lua` at the start of any macOS CopyURL work**, not just when troubleshooting a reported failure, since the live file can silently regress without any user-visible trigger. |
 | 2026-08-13 | **Merged `linux-port-pr` (22 commits) into `master` and pushed** (merge commit `a3eece5`). One conflict, `manifest.json`: master's Phase-1 bump (`c74da9e`) had `version: 1.1.0` + `permissions: ["clipboardWrite"]`; `linux-port-pr` carried `1.2.8` + `permissions: ["clipboardWrite", "storage"]` + the new `gemini.google.com` content-script entry (the `storage` permission + Gemini match are required by the new `gemini.js` Linux in-browser paste handoff). Took the linux-port-pr side (newer version, cross-platform description, `storage` perm + Gemini match) — the master bump was a strict subset. `content.js` auto-merged cleanly; verified no stray conflict markers, `node --check` on `content.js` + `gemini.js`. Deleted the now-fully-merged remote `origin/linux-port-pr`. | Consolidates all platform work (Linux Ubuntu/GNOME Wayland port + macOS native `Gemini.app` + AX send-button submit + AXValue paste + e2e tests) onto `master`. Note: the sibling `origin/linux-port` branch is **not** git-merged (13 distinct commits, a separate earlier history that was reorganized into the PR branch) but its tree is a strict *older* subset of master (`copyurl.sh` `CONFIG_VERSION v4 2026-06-11`; master is net +4519 lines over it) — it's the superseded early Linux dev line, retained pending an explicit delete decision. |
 
+| 2026-10-11 | Windows shortcut changed from Alt+Z to Alt+A (`$!a::`). Updated Windows workflow docs and AHK test harness; Linux keeps its separately configured GNOME Alt+A, macOS stays Option+Z. | User requested Alt+A on Windows. Reload `copy.ahk` to activate the new binding. |
 ## Diagnostic flags
 - **Extension**: set `localStorage.__copyurlDebug = "1"` on a youtube.com page (persisted). Enables ring buffer at `window.__copyurlLog` (last 200 events) and `console.debug("[CopyURL]", ...)` output. Title beacon is **always on** (cheap, invisible suffix using zero-width char + tag).
 - **AutoHotkey**: `kVerboseLog := true` at top of [copy.ahk](copy.ahk) — adds per-stage timing + pre/post title in the log.
@@ -93,15 +94,12 @@ After every F24 keydown the extension processes, it appends ` ​[CU:STATE]` (ze
 - Phase 0 + Phase 1 implemented (Windows instrumentation).
 - Gemini click path now cursorless: `PostClickAtScreen` posts `WM_MOUSEMOVE` + `WM_LBUTTONDOWN/UP` directly to the largest `Chrome_RenderWidgetHostHWND` (no `Click()` / `MouseMove`). OS cursor stays put through the entire flow.
 - Composer Y is found via native `PixelSearch` (BitBlt) instead of a per-pixel `PixelGetColor` loop — scan dropped from ~11 s to <200 ms on the user's display.
-- `#MaxThreadsBuffer true` so a second Alt+Z press while the first handler is still running gets queued instead of dropped.
-- Stress harness (Phase 2) not yet run — project pivoted to platform ports (macOS, Linux) and Gemini-reliability work; see decision log.
-
+- `#MaxThreadsBuffer true` queues a second Windows Alt+A press while the first handler is still running.
 ## Next steps (resume here)
-1. **Windows**: reload the extension in Brave/Chrome (`brave://extensions` → reload) — the merge added `gemini.js` + the `storage` permission, so a reload is required for the new `manifest.json` to take effect. Then reload [copy.ahk](copy.ahk) (tray → Reload Script).
+1. **Windows**: reload [copy.ahk](copy.ahk) (tray → Reload Script) to activate Alt+A. Reload the extension in Brave/Chrome (`brave://extensions` → reload) if the merged `gemini.js` and `storage` permission are not active.
 2. **macOS**: `diff Mac/hammerspoon/init.lua ~/.hammerspoon/init.lua` — the live file is known to silently diverge (2026-07-26/27 entries); re-sync the CopyURL section if it has regressed. Gemini target is now the native `com.google.GeminiMacOS` app.
 3. **Linux**: see [Linux/README.md](Linux/README.md) for the Ubuntu/GNOME Wayland setup (`ydotool` + `wl-clipboard` + Activate-Window-By-Title GNOME extension). Requires Gemini as a Brave app in the **same profile** as the extension (the paste handoff goes through `chrome.storage`).
 4. Move to Phase 2 (stress harness) — the deferred original plan.
-
 ## Files touched per phase
 - **Phase 0**: `CLAUDE.md`, `docs/troubleshooting.md`.
 - **Phase 1**: `content.js`, `copy.ahk`.
@@ -110,7 +108,7 @@ After every F24 keydown the extension processes, it appends ` ​[CU:STATE]` (ze
 
 ## Platform ports (kept in separate folders, extension is shared)
 - macOS port: `Mac/` (Hammerspoon, **Option+Z**).
-- Linux port: `Linux/` (Ubuntu/GNOME Wayland; `ydotool` + `wl-clipboard` + *Activate Window By Title* GNOME extension; **Alt+A** via GNOME custom shortcut). Orchestrator: `Linux/copyurl.sh`. On this Wayland setup `ydotool key`/`mousemove` are unreliable, so the trigger is `ydotool type "]"` (content.js also fires on `]`/BracketRight while hovering) and the **paste is done in-browser**: content.js queues URL+`PASTE_SUFFIX` into `chrome.storage.local`, and a Gemini content script (`gemini.js`, matches `gemini.google.com`) inserts it into the composer via the DOM and clicks send. Copy success is detected by polling `wl-paste` (no clipboard sequence number on Wayland). Requires the `storage` permission. See `Linux/README.md`.
+- Linux port: `Linux/` (Ubuntu/GNOME Wayland; `ydotool` + `wl-clipboard` + *Activate Window By Title* GNOME extension; **Alt+A** via GNOME custom shortcut). Orchestrator: `Linux/copyurl.sh`. On this Wayland setup `ydotool key`/`mousemove` are unreliable, so the trigger is `ydotool type "]"` (content.js also fires on `]`/BracketRight while hovering) and the **paste is done in-browser**: content.js queues URL+`PASTE_SUFFIX` into `chrome.storage.local`, and a Gemini content script (`gemini.js`, matches `gemini.google.com`) inserts it into the composer via the DOM and clicks send. Copy success is detected by polling `wl-paste` (no clipboard sequence number on Wayland). Requires the `storage` permission. See `Linux/README.md`. Linux hotkey is also Alt+A; it is configured separately through a GNOME custom shortcut.
 
 ## Out of scope
 - Gemini paste/Enter rewrite (separate test_enter*.ahk experiments).
@@ -121,20 +119,30 @@ After every F24 keydown the extension processes, it appends ` ​[CU:STATE]` (ze
 <!-- This block is regenerated by .githooks/pre-commit on every commit.
      Do not edit by hand — your changes will be overwritten. -->
 
-**Last updated:** `2026-09-18T21:38:00Z`
+**Last updated:** `2026-10-11T20:57:16Z`
 
 **Recent commits (last 5 on HEAD):**
 
-- `4bb947a` chore: rename project to YT-to-Gemini Summarizer Helper _(4 weeks ago)_
-- `eb4768e` docs: reflect linux-port-pr merge (3-platform support) + wire pre-commit hook _(5 weeks ago)_
-- `a3eece5` Merge linux-port-pr: Linux (Ubuntu/GNOME Wayland) port + macOS Gemini paste/submit hardening + native Gemini.app _(5 weeks ago)_
-- `c063ba5` feat(mac): switch Gemini target from Safari-WebApp PWA to native Gemini.app _(8 weeks ago)_
-- `2ed4bd1` docs: record 2026-07-26 finding — live macOS init.lua diverged from repo, lost keyStroke targeting + Gemini paste/submit hardening fixes _(8 weeks ago)_
+- `e32ecb6` docs(linux): rename hotkey Alt+Z to Alt+A; bump extension to 1.2.9 _(3 weeks ago)_
+- `4bb947a` chore: rename project to YT-to-Gemini Summarizer Helper _(7 weeks ago)_
+- `eb4768e` docs: reflect linux-port-pr merge (3-platform support) + wire pre-commit hook _(8 weeks ago)_
+- `a3eece5` Merge linux-port-pr: Linux (Ubuntu/GNOME Wayland) port + macOS Gemini paste/submit hardening + native Gemini.app _(8 weeks ago)_
+- `c063ba5` feat(mac): switch Gemini target from Safari-WebApp PWA to native Gemini.app _(3 months ago)_
 
 **Files in the pending commit:**
 
 - `CLAUDE.md`
-- `content.js`
 - `Linux/README.md`
-- `manifest.json`
+- `Linux/copyurl.sh`
+- `Mac/README.md`
+- `README.md`
+- `copy.ahk`
+- `docs/project-build-presentation.html`
+- `docs/troubleshooting.md`
+- `docs/youtube-to-gemini-helper-explainer.html`
+- `package.json`
+- `scripts/chrome_test.ahk`
+- `scripts/generate_workflow_demo_gif.py`
+- `scripts/run_tests.sh`
+- `tests/e2e/run_full_system.mjs`
 <!-- AUTO:RECENT-ACTIVITY:END -->

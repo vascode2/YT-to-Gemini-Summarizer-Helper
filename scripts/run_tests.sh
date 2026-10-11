@@ -120,7 +120,7 @@ elif [[ -z "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]]; then
   printf '  SKIP  no display detected\n'
 else
   if node tests/e2e/run_full_system.mjs 2>&1 | sed 's/^/    /'; then
-    ok "full-system flow (Alt+Z -> ydotool -> clipboard -> Gemini)"
+    ok "full-system flow (Linux Alt+A -> ydotool -> clipboard -> Gemini)"
   else
     bad "full-system flow failed (see output above)"
   fi

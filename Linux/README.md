@@ -251,7 +251,7 @@ the content-script notes are shared across all platforms.
 
 | Aspect | Windows ([../copy.ahk](../copy.ahk)) | macOS ([../Mac/hammerspoon/init.lua](../Mac/hammerspoon/init.lua)) | Linux ([copyurl.sh](copyurl.sh)) |
 |---|---|---|---|
-| Hotkey | **Alt+Z** | **Option+Z** | **Alt+A** (GNOME custom shortcut) |
+| Hotkey | **Alt+A** | **Option+Z** | **Alt+A** (GNOME custom shortcut) |
 | Internal trigger | **F24** | **Option+X** | **`]`** typed via `ydotool type` |
 | Clipboard change detection | `GetClipboardSequenceNumber` | poll contents | poll `wl-paste` for a youtube URL |
 | Window focus | `WinActivate` | `app:activate()` | *Activate Window By Title* extension via D-Bus |

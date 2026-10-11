@@ -6,7 +6,7 @@
 ;   1. Locates Chrome's main YouTube window (or asks the user to open one).
 ;   2. Activates it, finds a real thumbnail anchor, moves the system cursor over it
 ;      so the page registers a hover (extension needs a real hovered video).
-;   3. Clears the clipboard, presses Alt+Z (the user-facing hotkey handled by
+;   3. Clears the clipboard, presses Alt+A (the Windows user-facing hotkey handled by
 ;      copy.ahk), and waits for the clipboard sequence number to change.
 ;   4. Reports PASS / FAIL with the URL or timeout reason.
 ;
@@ -15,8 +15,8 @@
 ;
 ; Output: prints to a MsgBox AND appends to scripts\chrome_test_log.txt.
 
-; SendLevel 1 so copy.ahk's $!z:: hook (which by default has #InputLevel 0)
-; will accept our synthetic Alt+Z. Without this, AHK silently filters our
+; SendLevel 1 so copy.ahk's $!a:: hook (which by default has #InputLevel 0)
+; will accept our synthetic Alt+A. Without this, AHK silently filters our
 ; keys from other AHK scripts' hooks.
 SendLevel 1
 SendMode "Event"
@@ -76,7 +76,7 @@ Log("Window rect: x=" . wx . " y=" . wy . " w=" . ww . " h=" . wh)
 
 ; We don't know exact thumbnail positions, so probe a grid of points in the
 ; central content area. For each probe point we move the OS cursor there
-; (thumbnails react to hover), wait briefly, clear clipboard, send Alt+Z, and
+; (thumbnails react to hover), wait briefly, clear clipboard, send Alt+A, and
 ; see if the extension copies a youtube URL.
 CoordMode("Mouse", "Screen")
 MouseGetPos(&origX, &origY)
@@ -111,9 +111,9 @@ for _i, px in xs {
 
         seqBefore := ClipboardSeq()
         ; SendEvent (not SendInput): SendInput temporarily disables other AHK
-        ; scripts' keyboard hooks, so copy.ahk would never see the Alt+Z.
+        ; scripts' keyboard hooks, so copy.ahk would never see the Alt+A.
         ; SendEvent goes through the normal input queue and IS visible to hooks.
-        SendEvent("{Alt down}z{Alt up}")
+        SendEvent("{Alt down}a{Alt up}")
         ok := WaitForClipboardChange(seqBefore, kPerAttemptMs)
         if (ok) {
             Sleep(120)

@@ -75,7 +75,7 @@ For extension-side diagnostics see [../docs/troubleshooting.md](../docs/troubles
 
 | Aspect | Windows ([../copy.ahk](../copy.ahk)) | Mac ([hammerspoon/init.lua](hammerspoon/init.lua)) |
 |---|---|---|
-| Hotkey | **Alt+Z** | **Option+Z** |
+| Hotkey | **Alt+A** | **Option+Z** |
 | Internal extension trigger | **F24** (avoids Alt+X collision with CopyAnkitoChatGPT) | **Option+X** (no global binding on Mac) |
 | Cursorless click on Gemini | `PostMessage WM_LBUTTONDOWN/UP` to `Chrome_RenderWidgetHostHWND` | None needed — Safari WebApp auto-focuses composer on activation |
 | Hover refresh | `PostMessage WM_MOUSEMOVE` jitter | `hs.eventtap.event.newMouseEvent(mouseMoved):post(app)` |

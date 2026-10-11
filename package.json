@@ -2,7 +2,7 @@
   "name": "yt-to-gemini-summarizer-helper",
   "version": "1.2.8",
   "private": true,
-  "description": "Hover a YouTube thumbnail and copy/summarize its URL into Gemini.",
+  "description": "Move a hovered YouTube video into Gemini for quick summaries.",
   "scripts": {
     "test": "bash scripts/run_tests.sh",
     "test:e2e": "node tests/e2e/run_e2e.mjs",

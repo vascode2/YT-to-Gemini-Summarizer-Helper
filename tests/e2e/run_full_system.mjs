@@ -144,7 +144,7 @@ async function main() {
     // Retry wrapper: activating a window programmatically (gdbus) races the
     // compositor, so the very first ydotool keystroke after activation can land
     // before Brave has focus and get lost. In production the user's window is
-    // ALREADY focused when they press Alt+Z, so this race is a harness artifact,
+    // ALREADY focused when the GNOME Alt+A shortcut fires, so this race is a harness artifact,
     // not a product bug — we re-activate and re-run up to 3x to neutralise it.
     async function hoverAndTrigger(which) {
       const box = await yt.$eval(overlays[which], (el) => {
@@ -257,7 +257,7 @@ async function main() {
     }
 
     // ---- Unfocused-Brave guard (the user's reported bug) -------------------
-    // The user reported Alt+Z only worked when Brave already had keyboard focus.
+    // The user reported Linux Alt+A only worked when Brave already had keyboard focus.
     // copyurl.sh now activates the Brave/YouTube window itself before typing the
     // trigger. Prove it: move OS focus to a DECOY window and let copyurl.sh be
     // solely responsible for bringing Brave forward (the harness does NOT

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CopyURL Linux workflow (Ubuntu / GNOME Wayland)
-# Hotkey: Alt+Z  (bound via a GNOME custom keyboard shortcut -> this script)
+# Hotkey: Alt+A  (bound via a GNOME custom keyboard shortcut -> this script)
 #
 # Flow (analog of the Windows copy.ahk / macOS init.lua):
 #   0) Activate the Brave/YouTube window (via the "Activate Window By Title"
@@ -58,7 +58,7 @@ YOUTUBE_TITLE_NEEDLE="${COPYURL_YOUTUBE_NEEDLE:-YouTube}"
 # itself is performed by ../gemini.js, not by this script.)
 TRIGGER_CHAR="${COPYURL_TRIGGER_CHAR:-]}"
 
-# Settle delay (seconds) before the first trigger. The GNOME hotkey is Alt+Z, so
+# Settle delay (seconds) before the first trigger. The GNOME hotkey is Alt+A, so
 # the user is usually still holding Alt for a moment after it fires; this also
 # lets ydotool's first injection warm up. content.js no longer requires Alt to
 # be released, but a small pause makes the very first press more reliable.
@@ -223,7 +223,7 @@ copy_url_from_browser() {
   if activate_youtube; then
     sleep "$BROWSER_FOCUS_DELAY"
   fi
-  # Brief settle so a still-held Alt (from Alt+Z) is released and ydotool warms up.
+  # Brief settle so a still-held Alt (from Alt+A) is released and ydotool warms up.
   sleep "$TRIGGER_SETTLE_DELAY"
   for (( attempt = 1; attempt <= COPY_ATTEMPTS; attempt++ )); do
     # Clear to the sentinel so a same-URL re-copy is still detectable.
@@ -263,14 +263,14 @@ focus_gemini() {
 # Main flow
 # ----------------------------------------------------------------------------
 run_flow() {
-  log "Alt+Z fired (version=$CONFIG_VERSION)"
+  log "Alt+A fired (version=$CONFIG_VERSION)"
   local original_clip
   original_clip="$(clip_get)"
 
   if ! copy_url_from_browser; then
     # Restore whatever the user had before we wrote the sentinel.
     [[ -n "$original_clip" ]] && clip_set "$original_clip"
-    die "URL copy failed. Hover a YouTube thumbnail in Brave, then press Alt+Z again."
+    die "URL copy failed. Hover a YouTube thumbnail in Brave, then press Alt+A again."
   fi
 
   # content.js has now also queued the Korean prompt + URL for gemini.js, which
@@ -283,7 +283,7 @@ run_flow() {
 # Focus test: just activate the Gemini window. The paste itself is exercised
 # by the browser extension (content.js queues a payload, gemini.js inserts it),
 # which this script cannot trigger directly, so there is no standalone paste
-# test on Linux — use the full Alt+Z flow on a real thumbnail to test paste.
+# test on Linux — use the full Alt+A flow on a real thumbnail to test paste.
 run_focus_test() {
   log "focus-test start"
   notify "focus-test: activating Gemini"
@@ -298,7 +298,7 @@ CopyURL Linux orchestrator ($CONFIG_VERSION)
 Usage: copyurl.sh [command]
 
 Commands:
-  (none)        Run the full Alt+Z flow: type "]" -> copy URL -> focus Gemini
+  (none)        Run the full Alt+A flow: type "]" -> copy URL -> focus Gemini
                 (the browser extension inserts + submits the prompt).
   --focus-test  Just activate the Gemini window (focus sanity check).
   --check       Verify required dependencies are installed.
