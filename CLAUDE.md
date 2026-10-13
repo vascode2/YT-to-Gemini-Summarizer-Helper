@@ -33,12 +33,13 @@ Optional validate before reloading:
 > `g:\...\copy.ahk` anywhere, they are stale.
 
 ## What this project does
-Hover a YouTube thumbnail in Brave/Chrome → press **Alt+A** on Windows → AutoHotkey triggers the extension with F24, reads the copied YouTube URL, then sends the URL plus Korean summary suffix to the preferred Gemini desktop app. Chrome Gemini PWA remains a fallback.
+Hover a YouTube thumbnail in Brave/Chrome/Aside → press **Alt+A** on Windows → AutoHotkey triggers the extension with F24, reads the copied YouTube URL, then sends the URL plus Korean summary suffix to the preferred Gemini desktop app (Chrome Gemini PWA is the fallback). **Alt+Z** (Aside only) does the same copy but sends it to Aside's built-in AI side panel; on a Netflix tab in Aside it instead copies the current subtitle line (Ctrl+C) and asks the panel to interpret it in Korean.
 
 ## Windows / macOS / Linux components
 1. **Browser extension** ([content.js](content.js)) — tracks the hovered video and writes its URL to the clipboard when it receives F24.
-2. **Windows AHK v2 script** ([copy.ahk](copy.ahk)) — handles Alt+A, confirms clipboard change, then uses Windows UI Automation to fill Gemini desktop's composer and invoke Send. It selects the Chrome PWA flow only when the desktop app is absent.
+2. **Windows AHK v2 script** ([copy.ahk](copy.ahk)) — `$!a::` → `RunFlow("gemini")`: confirms the clipboard change, then uses Windows UI Automation to fill Gemini desktop's composer and invoke Send (Chrome PWA flow only when the desktop app is absent). `$!z::` → `RunNetflixExplain()` if the foreground Aside title contains `Netflix`, else `RunFlow("aside")`. Helpers: `scripts/send_gemini_desktop.ps1`, `scripts/send_aside_panel.ps1`.
 3. **Gemini desktop app** — receives the URL and `한국어로 요약해 줘`; the user can continue the conversation in the app.
+4. **Aside browser AI side panel** (Alt+Z) — in the same Aside window; model/provider is configured in Aside (`Settings > Models`; custom providers in `~/.aside/u/0/models.json`, `apiKey` may name a user env var such as `EZURIO_GATEWAY_VIRTUAL_KEY` — Aside must be restarted after that variable changes).
 
 No background script, no native messaging, no host permissions beyond the YouTube content-script match.
 
@@ -83,8 +84,9 @@ No background script, no native messaging, no host permissions beyond the YouTub
 
 | 2026-10-11 | Windows shortcut changed from Alt+Z to Alt+A (`$!a::`). Updated Windows workflow docs and AHK test harness; Linux keeps its separately configured GNOME Alt+A, macOS stays Option+Z. | User requested Alt+A on Windows. Reload `copy.ahk` to activate the new binding. |
 | 2026-10-11 | Windows Alt+A now targets the **Gemini desktop app** (`Gemini.exe`, Electron) first, Chrome PWA second. Desktop sends go through `scripts/send_gemini_desktop.ps1` (Windows UI Automation: composer `ValuePattern.SetValue` → verify → invoke **Send message** → wait for composer to clear); `copy.ahk` calls it via `kGeminiUiHelper` and logs `Gemini UIA helper exit=… status=…`. Existing composer text is replaced (same as the PWA Ctrl+A/Ctrl+V path). PWA keeps the pixel-scan/posted-click path. | User switched to the desktop app; the PWA path (render-widget pixel scan + posted clicks) does not apply to its window. UIA exposes the composer and Send button by name, so no coordinates/DPI calibration is needed. A first draft-preserving guard blocked every send when a stray character sat in the composer, so it was dropped. |
-|2026-10-13|Windows candidate browsers now include `Aside.exe` (Chromium; class `Chrome_WidgetWin_1`, titles `… - Aside`) via `kYouTubeBrowsers` in `copy.ahk`.|User made Aside the default browser. No other AHK change needed: window class, F24 beacon (`WinGetTitle`) and render-widget hover sync are Chromium-generic. The extension must be loaded in Aside (`aside://extensions` → Developer mode → Load unpacked → repo folder); it was NOT installed there as of this date.|
-|2026-10-13|**Alt+Z (Windows)** → Aside's AI side panel instead of Gemini. `copy.ahk` handler body is now `RunFlow(target)` (`$!a::` = `"gemini"`, `$!z::` = `"aside"`); `"aside"` restricts candidates to `Aside.exe` (new optional `browsers` param on `FindYouTubeCandidates`/`ForegroundYouTubeWindow`), skips `WriteLastWinner`, and hands off via `SendAsidePanel` → `scripts/send_aside_panel.ps1`.|Aside's side panel is browser UI (not page DOM), so only UIA can reach it. UIA tree (probed live): panel = `Document` containing button `Close side panel`; composer = tiptap/ProseMirror `Group` (class contains `composer-editor`) with TextPattern only (no ValuePattern) → focus, Ctrl+A, Ctrl+V (clipboard set by AHK), Enter; success = composer text empties. Panel toggle is Ctrl+S (docs.aside.com browser-basics). The panel auto-attaches the current tab as a `Remove <title>` chip; helper removes it unless the tab's video id equals the sent URL's (address bar `view_1012` ValuePattern). Verified: helper alone → message appears in the panel transcript with chip removed. Not verified: full Alt+Z with a real hover. Observed: the model configured at test time (GLM 5.3 Flash) returned "Provider authentication failed" — a provider setting in Aside, not this script. First helper run once hung >90 s with no cause found; later runs took seconds.|
+|2026-10-13|**Aside browser support.** `Aside.exe` (Chromium; window class `Chrome_WidgetWin_1`, titles `… - Aside`) added to `kYouTubeBrowsers`; no other copy-path change was needed (class, F24 beacon via `WinGetTitle`, render-widget hover sync are Chromium-generic). The extension must be loaded in Aside (`aside://extensions` → Developer mode → Load unpacked → repo folder).|User made Aside the default browser. The extension was not installed there at first, so Alt+A timed out until it was loaded. The running `copy.ahk` also has to be reloaded after edits (a stale instance explained a second "still timing out" report); launch it detached (`/force`), a child of a job gets killed with the job.|
+|2026-10-13|**Alt+Z → Aside AI side panel; context-dependent.** `copy.ahk` handler body is `RunFlow(target)`; `$!a::` = `"gemini"`, `$!z::` runs `RunNetflixExplain()` when the foreground window is `Aside.exe` with `kNetflixTitleMarker` ("Netflix") in the title, else `RunFlow("aside")`. `"aside"` restricts candidates to `Aside.exe` (optional `browsers` param on `FindYouTubeCandidates`/`ForegroundYouTubeWindow`), prefers the Aside YouTube window under the mouse (`MouseGetPos` 3rd arg; skips the foreground fast path if the cursor is over a different one), still activates a background YouTube window, and skips `WriteLastWinner`. Netflix path: release Alt → clear clipboard → Ctrl+C (the Netflix learning extension copies the merged current cue) → `SendAsidePanel(hwnd, kNetflixExplainPrefix . sentence, "", true)` → restore the user's clipboard; `-FocusPage` returns focus to the page so the next Alt+Z's Ctrl+C reaches the page, not the panel.|One script must own `$!z` (two scripts hooking one key race). Rejected on the way: a `#HotIf` that only registers Alt+Z while a YouTube tab is foreground (it broke pulling a background YouTube window forward) and one that passes Alt+Z through on Netflix (superseded by the Netflix explain feature). The panel is browser UI, not page DOM, so only UIA reaches it: panel = `Document` containing button `Close side panel`; composer = tiptap/ProseMirror `Group` (class contains `composer-editor`) with TextPattern only — so focus, Ctrl+A, Ctrl+V (clipboard set by AHK), Enter, success = composer text empties. Panel toggle is Ctrl+S (docs.aside.com). The panel auto-attaches the current tab as a `Remove <title>` chip; the helper removes it unless the tab's video id equals the sent URL's (address bar `view_1012`, read only when a YouTube `-Url` is given — it threw `Unsupported Pattern` otherwise). The paste probe uses only the first line (newline-safe).|
+|2026-10-13|**Aside helper reliability.** `send_aside_panel.ps1`: keys go through `keybd_event` (not `SendKeys.SendWait`, which blocks until Aside processes them); UIA `ClassName`/`Name` are cast to `[string]` (null → `null-valued expression` right after a previous send); the composer element is re-found every poll — a multi-paragraph paste (the Netflix prompt has a newline) makes ProseMirror rebuild its nodes and UIA calls on the stale element blocked until the limit; the helper writes a step trace (`<status>.trace`) that `copy.ahk` logs as `Aside UIA helper trace: …` on failure. `SendAsidePanel` waits at most 40 s (`Run` + `ProcessWaitClose`) so a hang cannot freeze the hotkey.|Found by injecting Alt+Z on a Netflix tab: first run hung after trace `pasted` (40 s timeout); after the fix → `Netflix sentence len=46` → `helper exit=0 status=sent` in ~3 s and the transcript showed `이 문장을 한국어로 해석해줘:` + the sentence. The same stale-element hang probably explains the earlier YouTube-path hangs (not re-proven). Also observed: the first model configured (GLM 5.3 Flash via the Ezurio gateway) returned "Provider authentication failed" until Aside was restarted with `EZURIO_GATEWAY_VIRTUAL_KEY` in its environment. Not verified: real physical Alt held down; focus actually returning to the page; the closed-panel path after these changes.|
 
 ## Diagnostic flags
 - **Extension**: set `localStorage.__copyurlDebug = "1"` on a youtube.com page (persisted). Enables ring buffer at `window.__copyurlLog` (last 200 events) and `console.debug("[CopyURL]", ...)` output. Title beacon is **always on** (cheap, invisible suffix using zero-width char + tag).
@@ -99,11 +101,13 @@ After every F24 keydown the extension processes, it appends ` ​[CU:STATE]` (ze
 - Gemini click path now cursorless: `PostClickAtScreen` posts `WM_MOUSEMOVE` + `WM_LBUTTONDOWN/UP` directly to the largest `Chrome_RenderWidgetHostHWND` (no `Click()` / `MouseMove`). OS cursor stays put through the entire flow.
 - Composer Y is found via native `PixelSearch` (BitBlt) instead of a per-pixel `PixelGetColor` loop — scan dropped from ~11 s to <200 ms on the user's display.
 - `#MaxThreadsBuffer true` queues a second Windows Alt+A press while the first handler is still running.
+- Windows Alt+Z (Aside): see the 2026-10-13 decision-log rows. Verified end-to-end on a Netflix tab (injected keys); YouTube path verified through the helper and via real hotkey use in the log (`Sent to Aside side panel.`).
 ## Next steps (resume here)
-1. **Windows**: reload [copy.ahk](copy.ahk) from the tray to use Alt+A with the Gemini desktop app. Keep the app running; the script falls back to the Chrome PWA only if desktop Gemini is not found.
+1. **Windows**: reload [copy.ahk](copy.ahk) from the tray (or launch it detached with `/force`). **Alt+A** → Gemini desktop app (PWA only if the app is absent); **Alt+Z** → Aside AI side panel (YouTube hover → summary, Netflix → interpret current line). Keep Gemini running for Alt+A; Aside needs a working AI provider for Alt+Z.
 2. **macOS**: `diff Mac/hammerspoon/init.lua ~/.hammerspoon/init.lua` — the live file is known to silently diverge (2026-07-26/27 entries); re-sync the CopyURL section if it has regressed. Gemini target is now the native `com.google.GeminiMacOS` app.
 3. **Linux**: see [Linux/README.md](Linux/README.md) for the Ubuntu/GNOME Wayland setup (`ydotool` + `wl-clipboard` + Activate-Window-By-Title GNOME extension). Requires Gemini as a Brave app in the **same profile** as the extension (the paste handoff goes through `chrome.storage`).
 4. Move to Phase 2 (stress harness) — the deferred original plan.
+5. **Backlog (Windows, Alt+Z → Aside):** user reports Alt+Z doesn't reliably open a *closed* Aside AI side panel and fill the prompt (parked 2026-10-13). The panel is opened with Ctrl+S (worked once right after an Aside restart); the UIA/key hangs found later (see the reliability row) may have been the real cause but the closed-panel path has NOT been re-run end-to-end since the fixes — start there; failures now log `Aside UIA helper trace: …` in `copyurl_log.txt`. Also known: in Aside split view the window title follows the focused pane, so Alt+Z reports "Active tab is not YouTube" when the Chats pane has focus (UIA `SelectionItem.Select()` on the YouTube tab does not move focus; a real click on the page could open the video).
 ## Files touched per phase
 - **Phase 0**: `CLAUDE.md`, `docs/troubleshooting.md`.
 - **Phase 1**: `content.js`, `copy.ahk`.
@@ -123,20 +127,21 @@ After every F24 keydown the extension processes, it appends ` ​[CU:STATE]` (ze
 <!-- This block is regenerated by .githooks/pre-commit on every commit.
      Do not edit by hand — your changes will be overwritten. -->
 
-**Last updated:** `2026-10-13T05:14:57Z`
+**Last updated:** `2026-10-13T06:25:29Z`
 
 **Recent commits (last 5 on HEAD):**
 
-- `780f998` feat(ahk): send Alt+A prompts to the Gemini desktop app via UI Automation _(31 hours ago)_
-- `7aa455a` feat: switch Windows hotkey to Alt+A _(32 hours ago)_
+- `b1d1285` feat(ahk): Aside browser support + Alt+Z sends to Aside AI side panel _(71 minutes ago)_
+- `780f998` feat(ahk): send Alt+A prompts to the Gemini desktop app via UI Automation _(32 hours ago)_
+- `7aa455a` feat: switch Windows hotkey to Alt+A _(33 hours ago)_
 - `e32ecb6` docs(linux): rename hotkey Alt+Z to Alt+A; bump extension to 1.2.9 _(3 weeks ago)_
 - `4bb947a` chore: rename project to YT-to-Gemini Summarizer Helper _(7 weeks ago)_
-- `eb4768e` docs: reflect linux-port-pr merge (3-platform support) + wire pre-commit hook _(9 weeks ago)_
 
 **Files in the pending commit:**
 
 - `CLAUDE.md`
 - `README.md`
 - `copy.ahk`
+- `docs/troubleshooting.md`
 - `scripts/send_aside_panel.ps1`
 <!-- AUTO:RECENT-ACTIVITY:END -->

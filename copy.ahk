@@ -3,8 +3,12 @@
 ; =============================================================================
 ;  YouTube-to-Gemini Helper  —  Alt+A: copy hovered YouTube video URL, then paste to Gemini
 ; -----------------------------------------------------------------------------
-;  VERSION: 2026-10-13.1
-;  CHANGES: Added Alt+Z — copies the hovered video exactly like Alt+A, then sends
+;  VERSION: 2026-10-13.2
+;  CHANGES: Alt+Z is context-dependent inside Aside: on a Netflix tab it copies the
+;           current sentence (Ctrl+C -> the Netflix learning extension copies the merged
+;           sentence) and asks the Aside AI side panel to interpret it in Korean; on a
+;           YouTube tab it still copies the hovered video and sends it to the panel.
+;  PRIOR (2026-10-13.1): Added Alt+Z — copies the hovered video exactly like Alt+A, then sends
 ;           it to the Aside browser's AI side panel (scripts/send_aside_panel.ps1)
 ;           instead of the Gemini app. Alt+Z only considers Aside.exe windows.
 ;  PRIOR (2026-06-25.8): Disabled per-paste new-chat (kGeminiNewChatEachTime := false) by user
@@ -20,7 +24,7 @@
 ;    2. Hover the AHK tray icon — tooltip shows "YouTube-to-Gemini Helper <version>".
 ;    3. copyurl_log.txt — a "Script loaded. version=..." line is written on (re)load.
 ; =============================================================================
-kScriptVersion := "2026-10-13.1"
+kScriptVersion := "2026-10-13.2"
 
 ; Buffer one extra Alt+A press while a handler is running (otherwise it's silently dropped
 ; on a slow Gemini activation, which makes consecutive copies look like "the wrong URL pasted").
@@ -55,6 +59,13 @@ kAsideUiHelper := A_ScriptDir "\scripts\send_aside_panel.ps1"
 
 ; Text appended AFTER the URL in Gemini (Alt+A). "" = URL only. Clipboard is restored to the plain URL after send.
 kGeminiPasteSuffix := " 한국어로 요약해 줘"
+
+; Alt+Z on a Netflix tab (Aside): prompt prefix placed before the copied sentence.
+kNetflixExplainPrefix := "이 문장을 한국어로 해석해줘:`n"
+; Foreground Aside window whose title contains this is treated as "Netflix".
+kNetflixTitleMarker := "Netflix"
+; How long to wait for the Netflix extension to put the sentence on the clipboard (ms).
+kNetflixCopyTimeoutMs := 1500
 
 ; Set true to append diagnostic lines to copyurl_log.txt next to this script.
 kDebugLog := true
@@ -447,7 +458,7 @@ SendGeminiDesktop(gemHwnd, payload, startNewChat := false) {
  * clipboard (caller restores it). `url` is the bare YouTube URL, used by the
  * helper to decide whether to drop the auto-attached current-page chip.
  */
-SendAsidePanel(asideHwnd, payload, url) {
+SendAsidePanel(asideHwnd, payload, url, focusPage := false) {
     global kAsideUiHelper
     payloadPath := A_Temp "\aside_payload_" . DllCall("GetCurrentProcessId") . "_" . A_TickCount . ".txt"
     statusPath := A_Temp "\aside_status_" . DllCall("GetCurrentProcessId") . "_" . A_TickCount . ".txt"
@@ -458,7 +469,7 @@ SendAsidePanel(asideHwnd, payload, url) {
         A_Clipboard := payload
         cmd := '"powershell.exe" -NoProfile -STA -ExecutionPolicy Bypass -File "' . kAsideUiHelper
             . '" -WindowHandle ' . asideHwnd . ' -PayloadPath "' . payloadPath . '" -StatusPath "' . statusPath
-            . '" -Url "' . url . '"'
+            . '" -Url "' . url . '"' . (focusPage ? ' -FocusPage' : '')
         ; Bounded wait: the helper has hung twice for 60+ s right after Aside (re)started
         ; (cause unknown), and an unbounded RunWait would freeze the hotkey handler.
         Run(cmd, A_ScriptDir, "Hide", &helperPid)
@@ -470,6 +481,8 @@ SendAsidePanel(asideHwnd, payload, url) {
         }
         status := (exitCode = -1) ? "helper timed out after 40 s" : (FileExist(statusPath) ? Trim(FileRead(statusPath, "UTF-8")) : "no-status")
         DebugLog("Aside UIA helper exit=" . exitCode . " status=" . status)
+        if (status != "sent" && FileExist(statusPath . ".trace"))
+            DebugLog("Aside UIA helper trace: " . StrReplace(Trim(FileRead(statusPath . ".trace", "UTF-8"), "`r`n"), "`n", " | "))
         return {ok: exitCode = 0 && status = "sent", status: status}
     } catch as err {
         DebugLog("Aside UIA helper failed: " . err.Message)
@@ -479,6 +492,8 @@ SendAsidePanel(asideHwnd, payload, url) {
             FileDelete(payloadPath)
         try if FileExist(statusPath)
             FileDelete(statusPath)
+        try if FileExist(statusPath . ".trace")
+            FileDelete(statusPath . ".trace")
     }
 }
 
@@ -934,7 +949,78 @@ TryCopyOnce(timeoutMs, hwnd := 0) {
 
 ; Alt+A -> Gemini app; Alt+Z -> Aside AI side panel. Same copy flow, different destination.
 $!a:: RunFlow("gemini")
-$!z:: RunFlow("aside")
+
+; Alt+Z does a different thing depending on the foreground Aside tab:
+;   Netflix tab  -> copy the current sentence, ask the Aside AI panel to interpret it (Korean)
+;   anything else -> the YouTube flow (copy the hovered video, send it to the Aside AI panel;
+;                    may bring a background Aside YouTube window forward, preferring the one
+;                    under the mouse).
+AltZNetflixActive() {
+    global kNetflixTitleMarker
+    try {
+        if !WinActive("ahk_exe Aside.exe")
+            return false
+        return InStr(WinGetTitle("A"), kNetflixTitleMarker) > 0
+    }
+    return false
+}
+
+; True if hwnd is an Aside window whose active tab is YouTube.
+IsAsideYouTubeWindow(hwnd) {
+    try
+        return WinGetProcessName(hwnd) = "Aside.exe" && WinGetClass(hwnd) = "Chrome_WidgetWin_1"
+            && InStr(WinGetTitle(hwnd), "YouTube")
+    return false
+}
+
+$!z:: {
+    if AltZNetflixActive()
+        RunNetflixExplain()
+    else
+        RunFlow("aside")
+}
+
+/**
+ * Alt+Z on Netflix: Ctrl+C makes the Netflix learning extension copy the merged current
+ * sentence (no text selected, no typing focus), then the sentence is sent to the Aside AI
+ * side panel in the SAME window — no window switch. Focus is returned to the page so the
+ * extension's keys keep working. The user's clipboard is restored afterwards.
+ */
+RunNetflixExplain() {
+    global kNetflixExplainPrefix, kNetflixCopyTimeoutMs
+    DebugLog("--- Alt+Z (Netflix -> Aside panel) pressed ---")
+    asideHwnd := WinExist("A")
+    savedClip := A_Clipboard
+
+    ; A held Alt would turn Ctrl+C into Ctrl+Alt+C and later Ctrl+V into an Alt-chord.
+    KeyWait("LAlt", "T0.4")
+    KeyWait("RAlt", "T0.4")
+
+    ; Clear first so an identical sentence still changes the clipboard sequence.
+    A_Clipboard := ""
+    seqBefore := ClipboardSequence()
+    SendInput("^c")
+    deadline := A_TickCount + kNetflixCopyTimeoutMs
+    while (ClipboardSequence() = seqBefore && A_TickCount < deadline)
+        Sleep(30)
+    Sleep(60)
+    sentence := Trim(A_Clipboard, " `t`r`n")
+    if (sentence = "") {
+        DebugLog("Netflix Ctrl+C produced no text (no current cue, typing focus, or extension not loaded).")
+        A_Clipboard := savedClip
+        TrayTip("현재 대사를 복사하지 못했습니다. 넷플릭스 화면을 클릭한 뒤 다시 시도하세요.", "YouTube-to-Gemini Helper")
+        return
+    }
+    DebugLog("Netflix sentence len=" . StrLen(sentence))
+
+    res := SendAsidePanel(asideHwnd, kNetflixExplainPrefix . sentence, "", true)
+    A_Clipboard := savedClip
+    if !res.ok {
+        TrayTip("Aside side panel send failed: " . res.status, "YouTube-to-Gemini Helper")
+        return
+    }
+    DebugLog("Sent Netflix sentence to Aside side panel.")
+}
 
 RunFlow(target) {
     DebugLog("--- " . (target = "aside" ? "Alt+Z (Aside)" : "Alt+A") . " pressed ---")
@@ -945,7 +1031,7 @@ RunFlow(target) {
     ; (not the live cursor) so moving the mouse afterward doesn't change which
     ; video gets copied. The fast path doesn't need it (it copies immediately).
     CoordMode("Mouse", "Screen")
-    MouseGetPos(&origX, &origY)
+    MouseGetPos(&origX, &origY, &hoverWin)
     DebugLog("Press-time cursor: " . origX . "," . origY)
 
     success := false
@@ -966,6 +1052,11 @@ RunFlow(target) {
     ; registers with altKey=false, WITHOUT waiting for the physical release
     ; (waiting would give the cursor time to drift off the thumbnail).
     fgInfo := ForegroundYouTubeWindow(browsers)
+    ; Alt+Z: if the cursor is over a DIFFERENT Aside YouTube window than the focused one,
+    ; the user means that window — skip the foreground fast path and let the slow path
+    ; (below) activate the window under the mouse.
+    if (fgInfo && target = "aside" && hoverWin && hoverWin != fgInfo.hwnd && IsAsideYouTubeWindow(hoverWin))
+        fgInfo := 0
     if (fgInfo) {
         SendInput("{LAlt up}{RAlt up}")
         DebugLog("Fast-path: foreground YouTube in " . fgInfo.exe . " — copying hovered video immediately.")
@@ -995,6 +1086,16 @@ RunFlow(target) {
         KeyWait("RAlt", "T0.4")
 
         candidates := FindYouTubeCandidates(browsers)
+        ; Alt+Z: try the Aside YouTube window under the mouse first.
+        if (target = "aside" && hoverWin) {
+            for _hi, _hc in candidates {
+                if (_hc.hwnd = hoverWin && _hi > 1) {
+                    candidates.RemoveAt(_hi)
+                    candidates.InsertAt(1, _hc)
+                    break
+                }
+            }
+        }
         if (candidates.Length = 0) {
             DebugLog("No YouTube-capable browser window found (Brave/Chrome/Aside).")
             TrayTip("YouTube window not found in Brave, Chrome or Aside.", "YouTube-to-Gemini Helper")
