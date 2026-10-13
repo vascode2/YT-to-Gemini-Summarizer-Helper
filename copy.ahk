@@ -3,8 +3,11 @@
 ; =============================================================================
 ;  YouTube-to-Gemini Helper  —  Alt+A: copy hovered YouTube video URL, then paste to Gemini
 ; -----------------------------------------------------------------------------
-;  VERSION: 2026-06-25.8
-;  CHANGES: Disabled per-paste new-chat (kGeminiNewChatEachTime := false) by user
+;  VERSION: 2026-10-13.1
+;  CHANGES: Added Alt+Z — copies the hovered video exactly like Alt+A, then sends
+;           it to the Aside browser's AI side panel (scripts/send_aside_panel.ps1)
+;           instead of the Gemini app. Alt+Z only considers Aside.exe windows.
+;  PRIOR (2026-06-25.8): Disabled per-paste new-chat (kGeminiNewChatEachTime := false) by user
 ;           preference — keep related summaries in ONE Gemini thread so the
 ;           conversation builds on itself. The new-chat code is retained; flip the
 ;           flag back to true if a stale thread starts refusing videos.
@@ -17,7 +20,7 @@
 ;    2. Hover the AHK tray icon — tooltip shows "YouTube-to-Gemini Helper <version>".
 ;    3. copyurl_log.txt — a "Script loaded. version=..." line is written on (re)load.
 ; =============================================================================
-kScriptVersion := "2026-06-25.8"
+kScriptVersion := "2026-10-13.1"
 
 ; Buffer one extra Alt+A press while a handler is running (otherwise it's silently dropped
 ; on a slow Gemini activation, which makes consecutive copies look like "the wrong URL pasted").
@@ -47,6 +50,8 @@ kGeminiNewChatBtnX := 30
 kGeminiNewChatBtnY := 102
 ; Windows UI Automation helper that fills and sends the Gemini desktop app composer.
 kGeminiUiHelper := A_ScriptDir "\scripts\send_gemini_desktop.ps1"
+; Windows UI Automation helper that pastes into and submits the Aside AI side panel (Alt+Z).
+kAsideUiHelper := A_ScriptDir "\scripts\send_aside_panel.ps1"
 
 ; Text appended AFTER the URL in Gemini (Alt+A). "" = URL only. Clipboard is restored to the plain URL after send.
 kGeminiPasteSuffix := " 한국어로 요약해 줘"
@@ -219,9 +224,10 @@ WM_LBUTTONUP := 0x202
 MK_LBUTTON := 0x1
 
 ; Browsers we'll search for the YouTube tab, in priority order. Brave first so
-; existing setups keep behaving identically; Chrome added so the same script
-; works when the extension is installed in Chrome instead.
-kYouTubeBrowsers := ["brave.exe", "chrome.exe"]
+; existing setups keep behaving identically; Chrome and Aside (Chromium-based,
+; window class Chrome_WidgetWin_1, titles end in " - Aside") added so the same
+; script works when the extension is installed there instead.
+kYouTubeBrowsers := ["brave.exe", "chrome.exe", "Aside.exe"]
 
 /**
  * Return an ordered list of candidate browser windows (most-likely first).
@@ -237,8 +243,10 @@ kYouTubeBrowsers := ["brave.exe", "chrome.exe"]
  *
  * Chrome's Gemini PWA window is excluded.
  */
-FindYouTubeCandidates() {
+FindYouTubeCandidates(browsers := "") {
     global kYouTubeBrowsers
+    if !IsObject(browsers)
+        browsers := kYouTubeBrowsers
     list := []
     seen := Map()
 
@@ -252,7 +260,7 @@ FindYouTubeCandidates() {
             fgExe := WinGetProcessName(fg)
             fgTitle := WinGetTitle(fg)
             fgCls := WinGetClass(fg)
-            for _i, exe in kYouTubeBrowsers {
+            for _i, exe in browsers {
                 if (fgExe = exe && fgCls = "Chrome_WidgetWin_1"
                     && fgTitle != "" && InStr(fgTitle, "YouTube")
                     && !(exe = "chrome.exe" && InStr(fgTitle, "Gemini"))) {
@@ -267,7 +275,7 @@ FindYouTubeCandidates() {
     ; 2. Collect all YouTube-titled windows from each browser, then non-YouTube fallbacks.
     youtubeOnly := []
     others := []
-    for _i, exe in kYouTubeBrowsers {
+    for _i, exe in browsers {
         for _j, hwnd in WinGetList("ahk_exe " . exe) {
             try {
                 cls := WinGetClass(hwnd)
@@ -334,8 +342,10 @@ FindYouTubeWindow() {
  * what gets copied) and lets the content-script "Copied!" toast render on the
  * still-focused YouTube tab.
  */
-ForegroundYouTubeWindow() {
+ForegroundYouTubeWindow(browsers := "") {
     global kYouTubeBrowsers
+    if !IsObject(browsers)
+        browsers := kYouTubeBrowsers
     fg := WinExist("A")
     if !fg
         return 0
@@ -346,7 +356,7 @@ ForegroundYouTubeWindow() {
     } catch {
         return 0
     }
-    for _i, e in kYouTubeBrowsers {
+    for _i, e in browsers {
         if (exe = e && cls = "Chrome_WidgetWin_1" && title != ""
             && InStr(title, "YouTube")
             && !(e = "chrome.exe" && InStr(title, "Gemini"))) {
@@ -431,6 +441,46 @@ SendGeminiDesktop(gemHwnd, payload, startNewChat := false) {
     }
 }
 
+
+/**
+ * Paste payload into the Aside AI side panel via the UIA helper. Clobbers the
+ * clipboard (caller restores it). `url` is the bare YouTube URL, used by the
+ * helper to decide whether to drop the auto-attached current-page chip.
+ */
+SendAsidePanel(asideHwnd, payload, url) {
+    global kAsideUiHelper
+    payloadPath := A_Temp "\aside_payload_" . DllCall("GetCurrentProcessId") . "_" . A_TickCount . ".txt"
+    statusPath := A_Temp "\aside_status_" . DllCall("GetCurrentProcessId") . "_" . A_TickCount . ".txt"
+    try {
+        FileAppend(payload, payloadPath, "UTF-8")
+        if FileExist(statusPath)
+            FileDelete(statusPath)
+        A_Clipboard := payload
+        cmd := '"powershell.exe" -NoProfile -STA -ExecutionPolicy Bypass -File "' . kAsideUiHelper
+            . '" -WindowHandle ' . asideHwnd . ' -PayloadPath "' . payloadPath . '" -StatusPath "' . statusPath
+            . '" -Url "' . url . '"'
+        ; Bounded wait: the helper has hung twice for 60+ s right after Aside (re)started
+        ; (cause unknown), and an unbounded RunWait would freeze the hotkey handler.
+        Run(cmd, A_ScriptDir, "Hide", &helperPid)
+        if ProcessWaitClose(helperPid, 40) {
+            try ProcessClose(helperPid)
+            exitCode := -1
+        } else {
+            exitCode := 0
+        }
+        status := (exitCode = -1) ? "helper timed out after 40 s" : (FileExist(statusPath) ? Trim(FileRead(statusPath, "UTF-8")) : "no-status")
+        DebugLog("Aside UIA helper exit=" . exitCode . " status=" . status)
+        return {ok: exitCode = 0 && status = "sent", status: status}
+    } catch as err {
+        DebugLog("Aside UIA helper failed: " . err.Message)
+        return {ok: false, status: err.Message}
+    } finally {
+        try if FileExist(payloadPath)
+            FileDelete(payloadPath)
+        try if FileExist(statusPath)
+            FileDelete(statusPath)
+    }
+}
 
 /**
  * Recursively find the largest Chrome_RenderWidgetHostHWND under a top-level Chromium window.
@@ -882,8 +932,14 @@ TryCopyOnce(timeoutMs, hwnd := 0) {
     }
 }
 
-$!a:: {
-    DebugLog("--- Alt+A pressed ---")
+; Alt+A -> Gemini app; Alt+Z -> Aside AI side panel. Same copy flow, different destination.
+$!a:: RunFlow("gemini")
+$!z:: RunFlow("aside")
+
+RunFlow(target) {
+    DebugLog("--- " . (target = "aside" ? "Alt+Z (Aside)" : "Alt+A") . " pressed ---")
+    ; Alt+Z must copy from an Aside tab (the AI side panel lives in that window).
+    browsers := (target = "aside") ? ["Aside.exe"] : kYouTubeBrowsers
     ; Capture the cursor position the instant Alt+A is pressed, before the user
     ; can move it. The slow/activation path syncs the YouTube hover at THIS point
     ; (not the live cursor) so moving the mouse afterward doesn't change which
@@ -909,7 +965,7 @@ $!a:: {
     ; early. Sending {Alt up} flips the OS modifier state so the synthetic F24
     ; registers with altKey=false, WITHOUT waiting for the physical release
     ; (waiting would give the cursor time to drift off the thumbnail).
-    fgInfo := ForegroundYouTubeWindow()
+    fgInfo := ForegroundYouTubeWindow(browsers)
     if (fgInfo) {
         SendInput("{LAlt up}{RAlt up}")
         DebugLog("Fast-path: foreground YouTube in " . fgInfo.exe . " — copying hovered video immediately.")
@@ -918,7 +974,8 @@ $!a:: {
             success := true
             pickedHwnd := fgInfo.hwnd
             pickedExe := fgInfo.exe
-            WriteLastWinner(pickedExe)
+            if (target != "aside")
+                WriteLastWinner(pickedExe)
             DebugLog("Fast-path copy succeeded (beacon=" . (res.beacon = "" ? "none" : res.beacon) . ").")
             ; (The "Copied!" toast dwell is applied in the common section below,
             ; so both the fast and slow paths get it.)
@@ -937,10 +994,10 @@ $!a:: {
         KeyWait("LAlt", "T0.4")
         KeyWait("RAlt", "T0.4")
 
-        candidates := FindYouTubeCandidates()
+        candidates := FindYouTubeCandidates(browsers)
         if (candidates.Length = 0) {
-            DebugLog("No YouTube-capable browser window found (Brave/Chrome).")
-            TrayTip("YouTube window not found in Brave or Chrome.", "YouTube-to-Gemini Helper")
+            DebugLog("No YouTube-capable browser window found (Brave/Chrome/Aside).")
+            TrayTip("YouTube window not found in Brave, Chrome or Aside.", "YouTube-to-Gemini Helper")
             return
         }
         DebugLog("Candidates: " . candidates.Length)
@@ -992,7 +1049,8 @@ $!a:: {
             }
             if (success) {
                 pickedHwnd := hwnd
-                WriteLastWinner(pickedExe)
+                if (target != "aside")
+                    WriteLastWinner(pickedExe)
                 break
             }
             DebugLog("Candidate " . pickedExe . " " . (candFailedFast ? "fast-failed (beacon=none)" : "gave up after " . kCopyMaxAttempts . " attempts") . " — falling through to next candidate.")
@@ -1040,6 +1098,16 @@ $!a:: {
         return
     }
     DebugLog("Got URL: " . clipUrl)
+    if (target = "aside") {
+        res := SendAsidePanel(pickedHwnd, clipUrl . kGeminiPasteSuffix, clipUrl)
+        A_Clipboard := clipUrl
+        if !res.ok {
+            TrayTip("Aside side panel send failed: " . res.status, "YouTube-to-Gemini Helper")
+            return
+        }
+        DebugLog("Sent to Aside side panel.")
+        return
+    }
     if (kGeminiPasteSuffix != "")
         A_Clipboard := clipUrl . kGeminiPasteSuffix
     VerboseLog("stage:find_gemini")
