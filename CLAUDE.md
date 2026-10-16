@@ -87,6 +87,7 @@ No background script, no native messaging, no host permissions beyond the YouTub
 |2026-10-13|**Aside browser support.** `Aside.exe` (Chromium; window class `Chrome_WidgetWin_1`, titles `… - Aside`) added to `kYouTubeBrowsers`; no other copy-path change was needed (class, F24 beacon via `WinGetTitle`, render-widget hover sync are Chromium-generic). The extension must be loaded in Aside (`aside://extensions` → Developer mode → Load unpacked → repo folder).|User made Aside the default browser. The extension was not installed there at first, so Alt+A timed out until it was loaded. The running `copy.ahk` also has to be reloaded after edits (a stale instance explained a second "still timing out" report); launch it detached (`/force`), a child of a job gets killed with the job.|
 |2026-10-13|**Alt+Z → Aside AI side panel; context-dependent.** `copy.ahk` handler body is `RunFlow(target)`; `$!a::` = `"gemini"`, `$!z::` runs `RunNetflixExplain()` when the foreground window is `Aside.exe` with `kNetflixTitleMarker` ("Netflix") in the title, else `RunFlow("aside")`. `"aside"` restricts candidates to `Aside.exe` (optional `browsers` param on `FindYouTubeCandidates`/`ForegroundYouTubeWindow`), prefers the Aside YouTube window under the mouse (`MouseGetPos` 3rd arg; skips the foreground fast path if the cursor is over a different one), still activates a background YouTube window, and skips `WriteLastWinner`. Netflix path: release Alt → clear clipboard → Ctrl+C (the Netflix learning extension copies the merged current cue) → `SendAsidePanel(hwnd, kNetflixExplainPrefix . sentence, "", true)` → restore the user's clipboard; `-FocusPage` returns focus to the page so the next Alt+Z's Ctrl+C reaches the page, not the panel.|One script must own `$!z` (two scripts hooking one key race). Rejected on the way: a `#HotIf` that only registers Alt+Z while a YouTube tab is foreground (it broke pulling a background YouTube window forward) and one that passes Alt+Z through on Netflix (superseded by the Netflix explain feature). The panel is browser UI, not page DOM, so only UIA reaches it: panel = `Document` containing button `Close side panel`; composer = tiptap/ProseMirror `Group` (class contains `composer-editor`) with TextPattern only — so focus, Ctrl+A, Ctrl+V (clipboard set by AHK), Enter, success = composer text empties. Panel toggle is Ctrl+S (docs.aside.com). The panel auto-attaches the current tab as a `Remove <title>` chip; the helper removes it unless the tab's video id equals the sent URL's (address bar `view_1012`, read only when a YouTube `-Url` is given — it threw `Unsupported Pattern` otherwise). The paste probe uses only the first line (newline-safe).|
 |2026-10-13|**Aside helper reliability.** `send_aside_panel.ps1`: keys go through `keybd_event` (not `SendKeys.SendWait`, which blocks until Aside processes them); UIA `ClassName`/`Name` are cast to `[string]` (null → `null-valued expression` right after a previous send); the composer element is re-found every poll — a multi-paragraph paste (the Netflix prompt has a newline) makes ProseMirror rebuild its nodes and UIA calls on the stale element blocked until the limit; the helper writes a step trace (`<status>.trace`) that `copy.ahk` logs as `Aside UIA helper trace: …` on failure. `SendAsidePanel` waits at most 40 s (`Run` + `ProcessWaitClose`) so a hang cannot freeze the hotkey.|Found by injecting Alt+Z on a Netflix tab: first run hung after trace `pasted` (40 s timeout); after the fix → `Netflix sentence len=46` → `helper exit=0 status=sent` in ~3 s and the transcript showed `이 문장을 한국어로 해석해줘:` + the sentence. The same stale-element hang probably explains the earlier YouTube-path hangs (not re-proven). Also observed: the first model configured (GLM 5.3 Flash via the Ezurio gateway) returned "Provider authentication failed" until Aside was restarted with `EZURIO_GATEWAY_VIRTUAL_KEY` in its environment. Not verified: real physical Alt held down; focus actually returning to the page; the closed-panel path after these changes.|
+|2026-10-16|**Linux: Aside Linux support, Alt+Z → Aside side panel (ext 1.3.0, `copyurl.sh` v6).** (1) `copyurl.sh` raises windows by Wayland app_id first (`activateByWmClass`: `COPYURL_BROWSER_WMCLASS`=`org.asidelinux.Browser`, `COPYURL_GEMINI_WMCLASS`=the Aside Gemini web app `chrome-gdfaincndogidkdcdkhapmbffkckdkhn-Default`), title needles only as fallback, with `highest_user_time` sort restored afterwards. (2) Success notification off by default (`COPYURL_NOTIFY=1`). (3) `copyurl.sh --aside` (GNOME shortcut `copyurl-aside`, Alt+Z) types `[`; `content.js` copies the URL and `chrome.runtime.sendMessage`s `fjdhphbdlfjogobdofoaagnlnkoibdge` (Aside) `{type:"aside-linux.prompt", text}`; Aside-Linux (`src/extension-companion.js` + `src/extension-panel-prompt.js`) opens the panel, inserts via the Tiptap editor (`element.editor`) and clicks `[data-testid=send-button]`. Aside accepts only ids in Aside-Linux `.local/companion-extensions.json` (this repo's unpacked id `gnkpcpmnkhflhbnoblakgdohadhnlljo`, path-derived). (4) `content.js` writes `copyurlTrace` / `copyurlAsideLast` to `chrome.storage.local` (readable on disk under the profile's `Local Extension Settings/<id>/`).|Alt+A worked once then failed: after a summary, a title match on `YouTube` raised the wrong window (the Gemini app), so `]` went there; app_id matching fixed it (verified repeated Alt+A). Gemini had to move from BrowserOS to Aside: `chrome.storage` is per browser profile. Alt+Z: messaging + panel open verified headless; first live run inserted the prompt but a synthetic Enter was ignored and focusing the composer made the next `[` land in the panel → switched to Tiptap insert + Send click without focus (not yet re-verified live). Aside-side caveat: Chrome keeps running the cached extension service worker while the manifest version is unchanged; Aside-Linux's launcher now reloads the Aside extension once when its Linux files changed.|
 
 ## Diagnostic flags
 - **Extension**: set `localStorage.__copyurlDebug = "1"` on a youtube.com page (persisted). Enables ring buffer at `window.__copyurlLog` (last 200 events) and `console.debug("[CopyURL]", ...)` output. Title beacon is **always on** (cheap, invisible suffix using zero-width char + tag).
@@ -127,21 +128,23 @@ After every F24 keydown the extension processes, it appends ` ​[CU:STATE]` (ze
 <!-- This block is regenerated by .githooks/pre-commit on every commit.
      Do not edit by hand — your changes will be overwritten. -->
 
-**Last updated:** `2026-10-13T06:25:29Z`
+**Last updated:** `2026-10-16T06:18:30Z`
 
 **Recent commits (last 5 on HEAD):**
 
-- `b1d1285` feat(ahk): Aside browser support + Alt+Z sends to Aside AI side panel _(71 minutes ago)_
-- `780f998` feat(ahk): send Alt+A prompts to the Gemini desktop app via UI Automation _(32 hours ago)_
-- `7aa455a` feat: switch Windows hotkey to Alt+A _(33 hours ago)_
-- `e32ecb6` docs(linux): rename hotkey Alt+Z to Alt+A; bump extension to 1.2.9 _(3 weeks ago)_
-- `4bb947a` chore: rename project to YT-to-Gemini Summarizer Helper _(7 weeks ago)_
+- `e7c9b1a` feat(ahk): Alt+Z Netflix line interpretation + Aside panel helper reliability; docs _(3 days ago)_
+- `b1d1285` feat(ahk): Aside browser support + Alt+Z sends to Aside AI side panel _(3 days ago)_
+- `780f998` feat(ahk): send Alt+A prompts to the Gemini desktop app via UI Automation _(4 days ago)_
+- `7aa455a` feat: switch Windows hotkey to Alt+A _(4 days ago)_
+- `e32ecb6` docs(linux): rename hotkey Alt+Z to Alt+A; bump extension to 1.2.9 _(4 weeks ago)_
 
 **Files in the pending commit:**
 
 - `CLAUDE.md`
-- `README.md`
-- `copy.ahk`
-- `docs/troubleshooting.md`
-- `scripts/send_aside_panel.ps1`
+- `content.js`
+- `Linux/copyurl.sh`
+- `Linux/README.md`
+- `manifest.json`
+- `package.json`
+- `package-lock.json`
 <!-- AUTO:RECENT-ACTIVITY:END -->

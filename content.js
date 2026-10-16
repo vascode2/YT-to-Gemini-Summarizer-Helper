@@ -47,6 +47,37 @@
     }
   }
 
+  // Aside Linux side panel ("Aside Browsing Agent"). Linux/copyurl.sh --aside
+  // types "[" instead of "]"; the prompt goes to the Aside extension, which
+  // opens its side panel and sends it there (Aside-Linux
+  // src/extension-companion.js). Aside accepts it only when this extension's id
+  // is listed in Aside-Linux's .local/companion-extensions.json. Must be called
+  // from the keydown handler: opening the panel needs the key press's gesture.
+  const ASIDE_EXTENSION_ID = "fjdhphbdlfjogobdofoaagnlnkoibdge";
+
+  function sendToAside(url) {
+    try {
+      chrome.runtime.sendMessage(
+        ASIDE_EXTENSION_ID,
+        { type: "aside-linux.prompt", text: url + PASTE_SUFFIX },
+        (reply) => {
+          const err = chrome.runtime.lastError?.message || (reply?.ok ? null : reply?.error || "no reply");
+          if (err) {
+            console.warn("[CopyURL] Aside panel handoff failed:", err);
+            showToast(null, "Aside panel unavailable");
+          }
+          diag(err ? "aside_fail" : "aside_ok", { url, err, panelOpened: reply?.panelOpened });
+          // Last result on disk (extension storage) for troubleshooting.
+          chrome.storage.local.set({ copyurlAsideLast: { ts: new Date().toISOString(), url, err, reply: reply ?? null } }).catch(() => {});
+        }
+      );
+    } catch (err) {
+      console.warn("[CopyURL] Aside panel handoff failed:", err);
+      showToast(null, "Reload this YouTube tab (extension updated)");
+      diag("aside_fail", { err: String(err) });
+    }
+  }
+
   // ---- Diagnostics: ring buffer + title beacon ----------------------------
   // Ring buffer is gated behind localStorage.__copyurlDebug = "1" (cheap when off).
   // Title beacon is ALWAYS on: a transient zero-width-space + "[CU:STATE]" suffix
@@ -72,6 +103,17 @@
     _ring.push(entry);
     if (_ring.length > 200) _ring.shift();
     try { console.debug("[CopyURL]", event, data || ""); } catch {}
+  }
+  // Persistent trace (extension storage, on disk) of trigger presses and focus
+  // changes, readable without DevTools when a hotkey silently does nothing.
+  function trace(event, data) {
+    try {
+      chrome.storage.local.get("copyurlTrace").then(({ copyurlTrace: list = [] }) =>
+        chrome.storage.local.set({
+          copyurlTrace: [...list, { ts: new Date().toISOString(), event, page: location.pathname, ...(data || {}) }].slice(-40),
+        })
+      ).catch(() => {});
+    } catch {}
   }
   function setBeacon(state) {
     try {
@@ -248,8 +290,10 @@
   );
 
   window.addEventListener("focus", () => {
+    trace("focus", { x: lastClientX, y: lastClientY });
     requestAnimationFrame(() => refreshHoverFromLastPointer());
   });
+  window.addEventListener("blur", () => trace("blur", { hovered: hoveredVideoUrl }));
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible")
@@ -302,18 +346,27 @@
       const isF19 = (e.key === "F19" || e.code === "F19") && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey;
       // Linux "]" trigger: match by key only here, decide whether to act below.
       const isBracketKey = e.code === "BracketRight" && !e.ctrlKey && !e.metaKey;
-      if (isF24 || isF19 || isBracketKey) {
+      // Linux Aside trigger ("["): same rules as "]", but the prompt goes to the
+      // Aside side panel instead of Gemini.
+      const isAsideKey = e.code === "BracketLeft" && !e.ctrlKey && !e.metaKey;
+      if (isF24 || isF19 || isBracketKey || isAsideKey) {
         // Always re-derive the hovered video from the live cursor position at
         // trigger time. YouTube's hover overlay can leave a STALE hoveredVideoUrl
         // (a stray "mouseout" that didn't clear, or a detached element after the
         // grid re-renders), which previously made every press copy the same old
         // URL and anchored the "Copied!" toast to an off-screen element. Refreshing
         // unconditionally keeps the copied URL and the toast anchor correct.
+        const before = hoveredVideoUrl;
         refreshHoverFromLastPointer();
+        trace("trigger", {
+          key: e.code, alt: e.altKey, before, hovered: hoveredVideoUrl, x: lastClientX, y: lastClientY,
+          at: (() => { const el = document.elementFromPoint(lastClientX, lastClientY); return el ? el.tagName + "#" + el.id : null; })(),
+          focused: document.hasFocus(), active: document.activeElement?.tagName,
+        });
 
         // For the "]" trigger, only act when we actually have a hovered video so
         // normal "]" typing (search box, comments) is never swallowed.
-        if (isBracketKey && !hoveredVideoUrl) {
+        if ((isBracketKey || isAsideKey) && !hoveredVideoUrl) {
           return; // let the keystroke through
         }
 
@@ -339,6 +392,9 @@
         // which inserts and submits it via the DOM (ydotool cannot type Korean).
         if (isBracketKey) {
           queueGeminiPaste(hoveredVideoUrl);
+        }
+        if (isAsideKey) {
+          sendToAside(hoveredVideoUrl);
         }
 
         // Synchronous copy first: navigator.clipboard.writeText is async and AutoHotkey often

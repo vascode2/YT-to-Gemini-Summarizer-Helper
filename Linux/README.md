@@ -244,6 +244,36 @@ The shell knobs below are environment variables read at the top of
 | Pasted into the wrong field / not submitted | Gemini DOM changed | Update the composer/send selectors in [../gemini.js](../gemini.js). |
 | Alt+A does nothing | Shortcut not bound, or another app owns Alt+A | Verify in Settings → Keyboard; try a different chord via the `binding` gsetting. |
 
+### Using Aside Linux instead of Brave
+
+Aside Linux (Chrome for Testing) works with the same Alt+A flow and no script
+changes. Requirements:
+
+1. Load this repo as an unpacked extension in Aside (`chrome://extensions` →
+   Developer mode → **Load unpacked**). Aside does not pass
+   `--disable-extensions-except`, so extra extensions persist in its profile.
+2. Open `https://gemini.google.com/app` in a **separate Aside window** (Ctrl+N)
+   and keep it as that window's active tab, so its title contains `Gemini`.
+   `chrome.storage` is per profile, so Gemini must be in Aside, not Brave.
+3. Reload the extension and the YouTube tab after pulling updates.
+
+If the log shows `activate_window_by_title('Gemini') -> (false,)`, no window
+title currently contains `Gemini` (the Gemini tab is in the background).
+
+### Alt+Z: send to the Aside side panel (Aside Linux only)
+
+**Alt+Z** (`copyurl.sh --aside`, GNOME custom shortcut `copyurl-aside`) works
+like Alt+A, but the prompt (`URL 한국말로 요약해줘`) goes to Aside's own side
+panel ("Aside Browsing Agent") in the same window instead of Gemini. The script
+types `[`; `content.js` copies the URL and messages the Aside extension, which
+opens the panel and sends the prompt.
+
+Aside only accepts the message from extensions listed in Aside-Linux's
+`.local/companion-extensions.json`. This repo loaded unpacked from
+`/home/yoon/Projects/Personal/YT-to-Gemini-Summarizer-Helper` has the id
+`gnkpcpmnkhflhbnoblakgdohadhnlljo` (Chrome derives it from the folder path, so
+it changes if the folder moves). After editing that file, restart Aside Linux.
+
 For extension-side diagnostics see [../docs/troubleshooting.md](../docs/troubleshooting.md);
 the content-script notes are shared across all platforms.
 
