@@ -160,8 +160,40 @@
 
   function refreshHoverFromLastPointer() {
     if (lastClientX < 0 || lastClientY < 0) return;
-    const el = document.elementFromPoint(lastClientX, lastClientY);
+    let el = document.elementFromPoint(lastClientX, lastClientY);
     if (!el) return;
+    // Aside (Ezurio) installs a fullscreen <aside-selection-guard> overlay while
+    // its region-selection modifier is armed (re-armed on every Alt press), which
+    // makes elementFromPoint return the guard instead of the hovered thumbnail.
+    // Fall back to hit-testing the YouTube renderers by geometry.
+    if (el.localName === "aside-selection-guard") {
+      const point = new DOMPoint(lastClientX, lastClientY);
+      const renderers = document.querySelectorAll(
+        "ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-video-renderer"
+      );
+      for (const renderer of renderers) {
+        const rect = renderer.getBoundingClientRect();
+        if (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          point.x >= rect.left &&
+          point.x <= rect.right &&
+          point.y >= rect.top &&
+          point.y <= rect.bottom
+        ) {
+          const link = renderer.querySelector(
+            'a#thumbnail[href], a[href*="/watch?v="], a[href*="/shorts/"]'
+          );
+          const clean = link && link.href ? extractVideoUrl(link.href) : null;
+          if (clean) {
+            hoveredVideoUrl = clean;
+            hoveredElement = link;
+            return;
+          }
+        }
+      }
+      return; // guarded point over no thumbnail: keep previous hover state
+    }
     const result = findVideoAnchor(el);
     if (result) {
       hoveredVideoUrl = result.url;

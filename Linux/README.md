@@ -74,7 +74,7 @@ Everything else is done where it is reliable:
 | Need | Tool | Why |
 |---|---|---|
 | Fire the content script | **`ydotool type "]"`** | Only working synthetic-input path; `]` has no YouTube shortcut and only acts while a thumbnail is hovered. |
-| Read clipboard (copy confirmation) | **`wl-clipboard`** (`wl-paste`) | Native Wayland clipboard. No `GetClipboardSequenceNumber`, so success = **polling** for a youtube URL. |
+| Read clipboard (copy confirmation) | **`xclip`** via Xwayland (fallback `wl-clipboard`) | No `GetClipboardSequenceNumber`, so success = **polling** for a youtube URL. GNOME lacks the Wayland data-control protocol, so every `wl-paste`/`wl-copy` maps a window that takes focus (visible flicker while polling). Mutter mirrors the clipboard to Xwayland, and `xclip` uses an unmapped X window, so polling through it does not change focus. |
 | Insert the Korean prompt + submit | **[../gemini.js](../gemini.js)** content script | DOM insertion handles Unicode natively and needs no OS input; works even if the Gemini tab is in the background. |
 | Focus the Brave & Gemini windows | **Activate Window By Title** GNOME extension | Wayland forbids apps from raising other windows; this trusted shell extension exposes a D-Bus method. Brave is raised **before** the trigger so Alt+A works without clicking Brave first. |
 | Global Alt+A hotkey | **GNOME custom shortcut** | Wayland has no app-level global hotkey grab; GNOME runs the script. |
@@ -85,7 +85,7 @@ Everything else is done where it is reliable:
 
 ```sh
 sudo apt update
-sudo apt install -y ydotool wl-clipboard bc libnotify-bin
+sudo apt install -y ydotool wl-clipboard xclip bc libnotify-bin
 ```
 
 If your distro's `ydotool` package does not include `ydotoold`, build it from

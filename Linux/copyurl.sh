@@ -13,7 +13,7 @@
 #      are hovering a YouTube thumbnail via `ydotool type`. content.js copies
 #      the hovered URL to the clipboard AND queues a Gemini paste payload in the
 #      extension's chrome.storage.local.
-#   2) Poll the clipboard (wl-paste) until a youtube.com URL appears, to confirm
+#   2) Poll the clipboard (xclip via Xwayland; wl-paste fallback) until a youtube.com URL appears, to confirm
 #      the copy succeeded (and retry the trigger if not).
 #   3) Activate the Gemini PWA window (via the "Activate Window By Title" GNOME
 #      extension's D-Bus method) so the result is visible.
@@ -41,7 +41,7 @@ set -uo pipefail
 # ----------------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------------
-CONFIG_VERSION="v6 2026-10-16 linux-aside-panel"
+CONFIG_VERSION="v7 2026-10-22 xclip-no-flicker"
 
 # Substring matched (case-insensitive on the extension side) against window
 # titles to find the Gemini window. The PWA's title contains "Gemini".
@@ -58,6 +58,9 @@ YOUTUBE_TITLE_NEEDLE="${COPYURL_YOUTUBE_NEEDLE:-YouTube}"
 # to match by title only (e.g. Brave).
 BROWSER_WMCLASS="${COPYURL_BROWSER_WMCLASS-org.asidelinux.Browser}"
 GEMINI_WMCLASS="${COPYURL_GEMINI_WMCLASS-chrome-gdfaincndogidkdcdkhapmbffkckdkhn-Default}"
+# Gemini PWA installed in another Chrome profile uses a different window class
+# (chrome-<id>-Profile_2); try both so either install works.
+GEMINI_WMCLASS2="${COPYURL_GEMINI_WMCLASS2:-chrome-gdfaincndogidkdcdkhapmbffkckdkhn-Profile_2}"
 
 # Trigger character typed into the browser to fire content.js. "]" has no
 # YouTube shortcut and content.js only acts on it while a thumbnail is hovered.
@@ -169,15 +172,34 @@ check_deps() {
 }
 
 # ----------------------------------------------------------------------------
-# Clipboard helpers (wl-clipboard)
+# Clipboard helpers (xclip, wl-clipboard fallback)
 # ----------------------------------------------------------------------------
+# GNOME/Mutter has no Wayland data-control protocol, so wl-paste/wl-copy map a
+# small xdg_toplevel to get keyboard focus on every call. Polling every 50 ms
+# made windows visibly flicker. Mutter mirrors the Wayland clipboard to
+# Xwayland in both directions, and xclip reads/writes it through an unmapped X
+# window (no focus change), so prefer xclip when Xwayland is available.
+if [[ -n "${DISPLAY:-}" ]] && command -v xclip >/dev/null 2>&1; then
+  CLIP_BACKEND=xclip
+else
+  CLIP_BACKEND=wl
+fi
+
 clip_get() {
   # Prints current clipboard text; empty string if clipboard is empty.
-  wl-paste --no-newline 2>/dev/null || true
+  if [[ "$CLIP_BACKEND" == xclip ]]; then
+    timeout 1 xclip -o -selection clipboard 2>/dev/null || true
+  else
+    wl-paste --no-newline 2>/dev/null || true
+  fi
 }
 
 clip_set() {
-  printf '%s' "$1" | wl-copy 2>/dev/null || log "WARN: wl-copy failed"
+  if [[ "$CLIP_BACKEND" == xclip ]]; then
+    printf '%s' "$1" | xclip -i -selection clipboard 2>/dev/null || log "WARN: xclip -i failed"
+  else
+    printf '%s' "$1" | wl-copy 2>/dev/null || log "WARN: wl-copy failed"
+  fi
 }
 
 # ----------------------------------------------------------------------------
@@ -216,9 +238,22 @@ activate_window_by() {
 
 activate_window_by_title() { activate_window_by activateBySubstring "$1"; }
 
+# Order matters: the Chrome-profile storage that gemini.js reads is per profile,
+# so a same-profile window must win before any other-profile window. The
+# browser-window fallback (no PWA installed in that profile) still pastes
+# correctly because gemini.js consumes the payload in a background tab.
 activate_gemini() {
-  if { [[ -n "$GEMINI_WMCLASS" ]] && activate_window_by activateByWmClass "$GEMINI_WMCLASS"; } \
+  if { [[ -n "$GEMINI_WMCLASS2" ]] && activate_window_by activateByWmClass "$GEMINI_WMCLASS2"; } \
+    || { [[ -n "$GEMINI_WMCLASS" ]] && activate_window_by activateByWmClass "$GEMINI_WMCLASS"; } \
     || activate_window_by_title "$GEMINI_TITLE_NEEDLE"; then
+    return 0
+  fi
+  # No dedicated Gemini PWA window (it only exists in the Default profile).
+  # The paste itself still happens: gemini.js consumes the queued payload in any
+  # gemini.google.com tab of the same profile (Chrome storage events fire even
+  # for background tabs). Bring the browser forward so the user sees the result.
+  if [[ -n "$BROWSER_WMCLASS" ]] && activate_window_by activateByWmClass "$BROWSER_WMCLASS"; then
+    log "WARN: Gemini PWA window not found; focused the browser instead (payload pasted in its Gemini tab)"
     return 0
   fi
   log "WARN: could not activate Gemini window (extension installed/enabled? title contains '$GEMINI_TITLE_NEEDLE'?)"
