@@ -195,10 +195,20 @@ async function main() {
         });
         const clip = (await sh("wl-paste", ["--no-newline"])).stdout;
         if (clip.includes("youtube.com")) return { clip, attempt };
+        // Three-way discrimination, because the clipboard is shared with the
+        // live desktop: the sentinel means OUR copy did not happen (a product
+        // failure), but neither the sentinel nor a URL means some OTHER process
+        // wrote the clipboard during the run -- the harness's exclusive-access
+        // assumption was violated, and reporting that as a product failure
+        // sends the reader hunting for a bug that is not there. Observed on a
+        // busy desktop: "Logs: console-log-...", a PNG, "DEAUTH_LEAVING".
+        if (!clip.startsWith(`__pre_${which}_`)) {
+          return { clip, attempt, contended: true };
+        }
         log(`  retry hover ${which}: attempt ${attempt} got ${JSON.stringify(clip.slice(0, 40))}`);
         await sleep(300);
       }
-      return { clip: (await sh("wl-paste", ["--no-newline"])).stdout, attempt: 3 };
+      return { clip: (await sh("wl-paste", ["--no-newline"])).stdout, attempt: 3, contended: false };
     }
 
     // Like hoverAndTrigger, but deliberately moves OS keyboard focus to a DECOY
@@ -246,7 +256,15 @@ async function main() {
     const copiedUrl = primary.clip;
     if (/^https:\/\/www\.youtube\.com\/watch\?v=VIDEO_[AB]{7}$/.test(copiedUrl))
       log(`  PASS  OS clipboard holds a live YouTube URL (ydotool + content.js, attempt ${primary.attempt})`);
-    else fail(`clipboard wrong.\n        expected: a youtube.com/watch URL\n        got:      ${JSON.stringify(copiedUrl)}`);
+    else if (primary.contended)
+      fail(
+        `clipboard was taken by another process during the run, so this result proves nothing.\n` +
+        `        got:      ${JSON.stringify(copiedUrl)}\n` +
+        `        The harness needs exclusive clipboard access. Close clipboard managers /\n` +
+        `        file-copy activity (or anything writing the clipboard) and re-run.`,
+      );
+    else
+      fail(`clipboard wrong.\n        expected: a youtube.com/watch URL\n        got:      ${JSON.stringify(copiedUrl)}`);
 
     const toast = await yt.evaluate(() => {
       const t = document.getElementById("copyurl-toast"); return t ? t.textContent : null;

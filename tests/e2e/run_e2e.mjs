@@ -148,18 +148,33 @@ async function main() {
   const headful = process.env.HEADFUL === "1";
   log(`fixture server on :${port}, extension at ${extDir}, headful=${headful}`);
 
-  const browser = await puppeteer.launch({
-    executablePath: findBrave(),
-    headless: headful ? false : "new",
-    args: [
-      `--disable-extensions-except=${extDir}`,
-      `--load-extension=${extDir}`,
-      "--no-sandbox",
-      "--disable-gpu",
-      "--no-first-run",
-      "--no-default-browser-check",
-    ],
-  });
+  // A launch failure says nothing about the product, but it does fail the suite,
+  // and it happened in ~half of recent CI runs: "Timed out after 30000 ms while
+  // waiting for the WS endpoint URL to appear in stdout". Chrome for Testing on
+  // a cold CI runner can take longer than the 30 s default to open its DevTools
+  // socket, so allow 90 s and retry once -- a genuine launch breakage still
+  // fails on the second attempt with a clear message.
+  const launch = () =>
+    puppeteer.launch({
+      executablePath: findBrave(),
+      headless: headful ? false : "new",
+      timeout: 90000,
+      args: [
+        `--disable-extensions-except=${extDir}`,
+        `--load-extension=${extDir}`,
+        "--no-sandbox",
+        "--disable-gpu",
+        "--no-first-run",
+        "--no-default-browser-check",
+      ],
+    });
+  let browser;
+  try {
+    browser = await launch();
+  } catch (err) {
+    log(`launch failed (${err.message.split("\n")[0]}); retrying once`);
+    browser = await launch();
+  }
 
   const results = {};
   try {
