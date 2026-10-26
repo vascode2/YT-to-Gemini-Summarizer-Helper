@@ -269,8 +269,10 @@ timestamps truncated to the second and a trace caused by this very press can
 otherwise look older than the press.
 
 The desktop notification says the same thing, so you do not need the log for the
-common cases. Trace locations default to Brave, Chrome, and the Aside Linux
-profile; override with `COPYURL_PROFILE_ROOTS` (space-separated profile roots).
+common cases. Only files holding the extension's own `copyurlTrace` key are read, so another
+extension writing at the same moment cannot be mistaken for ours. Trace
+locations default to Brave, Chrome, and the Aside Linux profile; override with
+`COPYURL_PROFILE_ROOTS` (space-separated profile roots).
 
 ## Troubleshooting
 

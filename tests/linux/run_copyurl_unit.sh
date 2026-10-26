@@ -351,10 +351,21 @@ trace_write() {
 # ISO timestamps are truncated to the second and `find -newermt` is strict, so a
 # trace caused by the press itself can be stamped at or just before the press
 # second. That used to intermittently discard it and report the wrong cause.
+# The real extension storage holds the `copyurlTrace` key, and copyurl.sh uses
+# that key to tell OUR extension's files from every other installed extension's.
+# Fixtures must therefore carry it, or the diagnosis skips them.
 trace_write_ago() {
   local ago="$1" dir="$SB/profiles/Default/Local Extension Settings/gnkpcpmnkhflhbnoblakgdohadhnlljo"
   mkdir -p "$dir"
-  printf '%s' "${2//@TS@/$(date -u -d "@$(( $(date +%s) - ago ))" +%Y-%m-%dT%H:%M:%S.000Z)}" >"$dir/000003.log"
+  printf 'copyurlTrace\0%s' "${2//@TS@/$(date -u -d "@$(( $(date +%s) - ago ))" +%Y-%m-%dT%H:%M:%S.000Z)}" >"$dir/000003.log"
+}
+
+# A DIFFERENT extension's storage, written now. copyurl.sh must ignore it: only
+# our own extension's silence means "the trigger never arrived".
+other_ext_write() {
+  local dir="$SB/profiles/Default/Local Extension Settings/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  mkdir -p "$dir"
+  printf 'someOtherKey\0{"event":"x","ts":"%s"}' "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" >"$dir/000003.log"
 }
 
 note "diagnosis: key never reached the page (no trace written)"
@@ -402,6 +413,15 @@ run_flow_scenario "before" "-
 expect_rc 1
 expect_log "the copy failed after the key arrived"
 expect_log "Check that xclip/wl-clipboard works"
+
+note "diagnosis: another extension writing must not look like ours responding"
+new_sandbox
+other_ext_write
+run_flow_scenario "before" "-
+-"
+expect_rc 1
+expect_log "no extension trace written since the press"
+expect_log "The extension did not respond"
 
 note "diagnosis: extension storage touched but no trigger recorded"
 new_sandbox

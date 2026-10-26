@@ -328,9 +328,22 @@ diagnose_copy_failure() {
   # `ts >= since` test intermittently discard the trace that proves what
   # happened. Genuinely stale triggers are minutes old, so 2s costs nothing.
   since=$(( since - 2 ))
+  # Only files belonging to THIS extension. Every installed extension gets its
+  # own `Local Extension Settings/<id>/` dir, so scanning the whole tree means
+  # any other extension writing at press time (a password manager, an ad
+  # blocker, AnythingLLM...) looks like "the extension responded but ignored the
+  # key" and the diagnosis blames a stale content script. Live log 2026-10-26
+  # 13:17:58 hit exactly that: five unrelated extensions wrote within the
+  # window while ours wrote nothing.
+  #
+  # The id is path-derived for an unpacked extension, so it differs per machine
+  # and per install location. Rather than hardcode it, match the trace key that
+  # only content.js ever writes.
   local -a files=()
   while IFS= read -r file; do
-    [[ -n "$file" ]] && files+=("$file")
+    [[ -n "$file" ]] || continue
+    grep -qa 'copyurlTrace' "$file" 2>/dev/null || continue
+    files+=("$file")
   done < <(
     local root
     for root in $COPYURL_PROFILE_ROOTS; do
