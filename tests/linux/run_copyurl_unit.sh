@@ -115,6 +115,10 @@ SH
            basename uname mktemp tail head awk tr sort; do
     src="$(command -v "$u" 2>/dev/null)" && ln -s "$src" "$SB/core/$u"
   done
+  # Deterministic backend selection: copyurl.sh prefers xclip only when DISPLAY
+  # is set, so pin it here instead of inheriting the caller's environment (CI
+  # has no DISPLAY, which silently switched every scenario to the wl backend).
+  export DISPLAY=:0
   export CU_SB="$SB"
   export XDG_STATE_HOME="$SB/state"
   export COPYURL_LOG_FILE="$SB/copyurl_log.txt"
@@ -253,10 +257,19 @@ if [[ "$(cat "$SB/triggers")" == "[" ]]; then ok "typed '['"; else bad "typed '$
 note "backend selection: wl-* when xclip is absent"
 new_sandbox
 rm -f "$SB/bin/xclip"
+export DISPLAY=:0          # Xwayland present but no xclip installed
 run_flow_scenario "user-clipboard-before" "$URL_A"
 expect_rc 0
 if grep -q '^wl-paste' "$SB/shim_calls"; then ok "fell back to wl-paste"; else bad "wl-paste fallback not used"; fi
 expect_clip "$URL_A"
+
+# ---------------------------------------------------------------------------
+note "backend selection: wl-* when there is no X display at all"
+new_sandbox
+unset DISPLAY              # pure Wayland, no Xwayland: xclip is unusable
+run_flow_scenario "user-clipboard-before" "$URL_A"
+expect_rc 0
+if grep -q '^wl-paste' "$SB/shim_calls"; then ok "used wl-paste"; else bad "wl-paste not used without DISPLAY"; fi
 
 # ---------------------------------------------------------------------------
 note "Summary"

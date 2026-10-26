@@ -119,6 +119,8 @@ async function main() {
       `--disable-extensions-except=${extDir}`,
       `--load-extension=${extDir}`,
       "--no-first-run", "--no-default-browser-check",
+      // Chrome 137+ silently ignores --load-extension unless this is present.
+      "--disable-features=DisableLoadExtensionCommandLineSwitch",
       "--new-window", "--window-size=1100,800", "--window-position=80,80",
     ],
   });

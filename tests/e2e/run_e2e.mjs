@@ -113,6 +113,8 @@ async function main() {
       "--disable-gpu",
       "--no-first-run",
       "--no-default-browser-check",
+      // Chrome 137+ silently ignores --load-extension unless this is present.
+      "--disable-features=DisableLoadExtensionCommandLineSwitch",
     ],
   });
 
