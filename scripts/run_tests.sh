@@ -7,6 +7,11 @@
 #   3) Runs the gemini.js paste/submit logic headlessly against a faithful
 #      mock of the real Gemini composer DOM (scripts/gemini_paste_test.html)
 #      using Brave/Chrome --headless, and asserts pass==true.
+#   4) Loads the real unpacked extension into a browser via puppeteer-core and
+#      drives the hover -> trigger -> Gemini paste + Send handoff.
+#   5) Runs the Linux orchestrator (Linux/copyurl.sh) hermetically with shimmed
+#      OS tools — no desktop required, so it also runs in CI.
+#   6) Opt-in: the full real-desktop system test (COPYURL_FULL_SYSTEM=1).
 #
 # Exit code 0 = all green. Non-zero = something failed (and what).
 #
@@ -47,7 +52,9 @@ fi
 # ---- 3. headless gemini.js paste test --------------------------------------
 note "gemini.js paste/submit (headless, faithful Gemini DOM mock)"
 BROWSER=""
-for c in brave-browser brave google-chrome chromium chromium-browser; do
+# CHROME_PATH first: GitHub Actions' setup-chrome installs outside PATH.
+for c in "${CHROME_PATH:-}" "${BRAVE_PATH:-}" brave-browser brave google-chrome chromium chromium-browser; do
+  [[ -n "$c" ]] || continue
   if command -v "$c" >/dev/null 2>&1; then BROWSER="$(command -v "$c")"; break; fi
 done
 if [[ -z "$BROWSER" ]]; then
@@ -100,7 +107,20 @@ else
   fi
 fi
 
-# ---- 5. full-system end-to-end (real copyurl.sh + ydotool + clipboard) ------
+# ---- 5. hermetic Linux orchestrator unit tests (no desktop needed) ---------
+# Runs the GENUINE Linux/copyurl.sh with shimmed ydotool/xclip/wl-*/gdbus and a
+# file-backed clipboard, so the orchestration logic (sentinel reset, retry loop,
+# failure restore, --aside trigger, clipboard backend choice) is covered on any
+# machine — including CI with no display. Every one of those has broken in the
+# field at least once, and none of them are reachable from the browser tests.
+note "Linux orchestrator unit tests (copyurl.sh, hermetic)"
+if bash tests/linux/run_copyurl_unit.sh 2>&1 | sed 's/^/    /'; then
+  ok "copyurl.sh orchestration (success/retry/failure/sentinel/aside/backend)"
+else
+  bad "copyurl.sh orchestration tests failed (see output above)"
+fi
+
+# ---- 6. full-system end-to-end (real copyurl.sh + ydotool + clipboard) ------
 # The deepest test: runs the GENUINE Linux/copyurl.sh orchestrator (real ydotool
 # "]" trigger, real wl-clipboard polling, real window activation) against a real
 # headful Brave + the real extension, and asserts the hovered URL reaches the OS

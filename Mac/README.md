@@ -39,6 +39,30 @@ Variables at the top of [hammerspoon/init.lua](hammerspoon/init.lua):
 | `pasteSuffix` | `" 한국어로 요약해 줘"` | Text appended after the URL before Cmd+V. Set `""` to paste just the URL. |
 | `CONFIG_VERSION` | `"vN …"` | Stamp logged on load and shown in the ready toast — bumped on every script change so you can confirm the live build matches the file. |
 
+## Checking the live file for drift (do this first)
+
+`~/.hammerspoon/init.lua` is a **real file, not a symlink** to this repo, and it
+also carries unrelated automation (display layout, zoom, uBar nudges), so it
+evolves independently. It has silently reverted the CopyURL section at least
+twice (2026-07-26, 2026-07-27) — each time while reporting a *higher*
+`CONFIG_VERSION` than the fixed one, which is why the version stamp proves
+nothing.
+
+```bash
+Mac/check_live_sync.sh                 # exit 1 on drift
+Mac/check_live_sync.sh --section-diff  # + unified diff of the CopyURL section
+```
+
+It compares **content**, not versions: every CopyURL symbol defined in the
+tracked file must exist in the live one, plus nine named fix markers (one per
+regression that actually happened). Anything after the `-- Ctrl + mouse wheel`
+banner belongs to other automation and is not compared, so live-only additions
+are not flagged. Before editing the live file:
+
+```bash
+cp ~/.hammerspoon/init.lua ~/.hammerspoon/init.lua.bak_$(date +%Y%m%d_%H%M%S)
+```
+
 ## Live reload & logs
 
 - **Auto-reload**: a `hs.pathwatcher` on `~/.hammerspoon/` reloads the config whenever `init.lua` changes (Google Drive sync edits also trigger it).

@@ -1,0 +1,68 @@
+name: tests
+
+# Runs the parts of `scripts/run_tests.sh` that do not need a real desktop:
+#   - node syntax checks on content.js / gemini.js
+#   - manifest.json validity
+#   - gemini.js paste/submit against the headless DOM mock
+#   - the real unpacked extension end-to-end via puppeteer-core
+#   - the hermetic Linux orchestrator tests (shimmed ydotool/xclip/gdbus)
+#
+# Deliberately NOT run: the full-system test (tests/e2e/run_full_system.mjs)
+# needs Wayland + ydotoold + a headful browser, and the macOS drift check
+# (Mac/check_live_sync.sh) needs the live ~/.hammerspoon/init.lua. Both SKIP
+# cleanly here; see the "macOS drift check in CI" issue.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The e2e test loads the unpacked extension into a real Chromium.
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+        with:
+          chrome-version: stable
+
+      - name: Verify scripts are executable
+        # GNOME custom shortcuts exec copyurl.sh directly; a lost exec bit has
+        # broken the hotkey in the field before.
+        run: |
+          for f in Linux/copyurl.sh scripts/run_tests.sh \
+                   tests/linux/run_copyurl_unit.sh Mac/check_live_sync.sh; do
+            if [ ! -x "$f" ]; then echo "::error file=$f::not executable"; exit 1; fi
+          done
+
+      - name: Run tests
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          COPYURL_LOG_FILE: ${{ runner.temp }}/copyurl_log.txt
+        run: bash scripts/run_tests.sh
+
+      - name: Upload test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: copyurl-test-logs
+          path: |
+            ${{ runner.temp }}/copyurl_log.txt
+            /tmp/cu_mac_diff.txt
+          if-no-files-found: ignore
+          retention-days: 7

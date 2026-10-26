@@ -53,10 +53,10 @@ No background script, no native messaging, no host permissions beyond the YouTub
 3. **Pre-copy `SendInput("{Escape}")`** ([copy.ahk](copy.ahk)) blurs/cancels page state in unhelpful ways.
 4. **MV3 re-injection race**: tab reload / SPA navigation before listener attached.
 
-## Plan (6 phases — see [/memories/session/plan.md](.) in agent memory)
+## Plan (6 phases — Phase 2 is tracked as issue #3; the rest is historical)
 - **Phase 0** *(this commit)*: handoff scaffolding — `CLAUDE.md`, `docs/troubleshooting.md`.
 - **Phase 1**: opt-in instrumentation — content.js ring-buffer + `document.title` beacon `[CU:ok|null|err|busy]`; copy.ahk pre/post-title logging + per-stage timing; log rotation.
-- **Phase 2**: stress harness — `scripts/stress_copy.ahk` + `scripts/analyze_stress.py`.
+- **Phase 2**: stress harness — `scripts/stress_copy.ahk` + `scripts/analyze_stress.py`. **Never implemented** (issue #3); the hermetic orchestrator tests added 2026-10-26 cover the logic but not repeated hover-to-clipboard runs.
 - **Phase 3**: targeted fixes A–E (async-clipboard race, stale hover, Escape, MV3 readiness, Alt collision) — each independently revertable, each gated by N=200 stress run.
 - **Phase 4**: validation (≥99% success, zero "no-beacon" outcomes).
 - **Phase 5**: default flags OFF, instrumentation stays.
@@ -90,6 +90,8 @@ No background script, no native messaging, no host permissions beyond the YouTub
 |2026-10-16|**Linux: Aside Linux support, Alt+Z → Aside side panel (ext 1.3.0, `copyurl.sh` v6).** (1) `copyurl.sh` raises windows by Wayland app_id first (`activateByWmClass`: `COPYURL_BROWSER_WMCLASS`=`org.asidelinux.Browser`, `COPYURL_GEMINI_WMCLASS`=the Aside Gemini web app `chrome-gdfaincndogidkdcdkhapmbffkckdkhn-Default`), title needles only as fallback, with `highest_user_time` sort restored afterwards. (2) Success notification off by default (`COPYURL_NOTIFY=1`). (3) `copyurl.sh --aside` (GNOME shortcut `copyurl-aside`, Alt+Z) types `[`; `content.js` copies the URL and `chrome.runtime.sendMessage`s `fjdhphbdlfjogobdofoaagnlnkoibdge` (Aside) `{type:"aside-linux.prompt", text}`; Aside-Linux (`src/extension-companion.js` + `src/extension-panel-prompt.js`) opens the panel, inserts via the Tiptap editor (`element.editor`) and clicks `[data-testid=send-button]`. Aside accepts only ids in Aside-Linux `.local/companion-extensions.json` (this repo's unpacked id `gnkpcpmnkhflhbnoblakgdohadhnlljo`, path-derived). (4) `content.js` writes `copyurlTrace` / `copyurlAsideLast` to `chrome.storage.local` (readable on disk under the profile's `Local Extension Settings/<id>/`).|Alt+A worked once then failed: after a summary, a title match on `YouTube` raised the wrong window (the Gemini app), so `]` went there; app_id matching fixed it (verified repeated Alt+A). Gemini had to move from BrowserOS to Aside: `chrome.storage` is per browser profile. Alt+Z: messaging + panel open verified headless; first live run inserted the prompt but a synthetic Enter was ignored and focusing the composer made the next `[` land in the panel → switched to Tiptap insert + Send click without focus (not yet re-verified live). Aside-side caveat: Chrome keeps running the cached extension service worker while the manifest version is unchanged; Aside-Linux's launcher now reloads the Aside extension once when its Linux files changed.|
 |2026-10-22|**Linux: Alt+A broke after Aside started opening the Ezurio profile (ext 1.3.1).** Aside-Linux `c367850` (2026-10-22) starts Chrome in the last-used profile (`--profile-directory`), so Aside came up in `Profile 2` (Ezurio) instead of `Default` (Personal). Three effects there: the unpacked helper (`gnkpcpmnkhflhbnoblakgdohadhnlljo`) was not installed in that profile; Aside's `<aside-selection-guard>` (fullscreen, `pointer-events:auto`, re-armed on every Alt press) made `elementFromPoint` return the guard (trace `at:"ASIDE-SELECTION-GUARD#"`, `hovered:null`); and the Gemini web app exists only in `Default`, so its `gemini.js` never sees the payload that content.js queued in Ezurio's `chrome.storage` (window activates, nothing is pasted). Fixes: `refreshHoverFromLastPointer` hit-tests YouTube renderers by geometry when the guard is on top; `copyurl.sh` tries `chrome-<id>-Profile_2` (`COPYURL_GEMINI_WMCLASS2`) before `-Default`, then title, then the browser window. Operational fix: Aside back on Personal only (`Local State` `profile.last_used`=`Default`, `last_active_profiles`=`["Default"]`; backup `Local State.bak.copyurl`).|Before 10-22 YouTube, helper, Gemini app and `chrome.storage` all lived in `Default`. `chrome.storage` is per profile, so YouTube and the Gemini window must share one profile. Opening an Ezurio window makes Chrome record `last_used`=`Profile 2` again, and the next Aside start moves back to Ezurio. With two Aside windows open (same app_id `org.asidelinux.Browser`), activation can raise the window that is not under the cursor; trace then shows stale pointer `x=1879,y=18`, `at:null`.|
 |2026-10-22|**Linux: clipboard polling via `xclip` (`copyurl.sh` v7).** `clip_get`/`clip_set` use `xclip -selection clipboard` when `DISPLAY` is set and `xclip` exists; `wl-paste`/`wl-copy` remain the fallback.|User saw windows flicker on every Alt+A. `WAYLAND_DEBUG=1 wl-paste` shows it creates an `xdg_toplevel` (GNOME has no `zwlr`/`ext_data_control`), so each 50 ms poll stole focus. Measured on the YouTube tab trace: 10× `wl-paste` → 6 blur/8 focus; 10× `xclip -o` + 1 `xclip -i` → 0/0. Mutter syncs Wayland↔Xwayland clipboard both ways; a Wayland write after an xclip sentinel was detected in 0.49 s (0.4 s of it was the injected delay).|
+|2026-10-26|**Testability overhaul: hermetic Linux orchestrator tests + CI + a macOS drift checker; backlog moved to GitHub Issues.** Added `tests/linux/run_copyurl_unit.sh` (runs the genuine `Linux/copyurl.sh` with PATH-shimmed `ydotool`/`xclip`/`wl-copy`/`wl-paste`/`gdbus`/`notify-send`, a file-backed clipboard, and a restricted coreutils PATH so "xclip is absent" is simulable) covering success, retry, total failure + clipboard restore, the stale-clipboard false positive, same-URL re-copy, `--aside`, and backend selection. Wired into `scripts/run_tests.sh` as step 5. Added `.github/workflows/tests.yml` (ubuntu, setup-node, setup-chrome, exec-bit check) — the first CI this repo has had. Added `Mac/check_live_sync.sh`: content-based (not version-based) comparison of the tracked `Mac/hammerspoon/init.lua` CopyURL section against the live `~/.hammerspoon/init.lua`, auto-deriving required symbols and asserting nine named fix markers, one per regression that actually happened. Backlog migrated from this file to GitHub Issues #2–#5. Also fixed a stale `tests/e2e` assertion (`PASTE_PREFIX = "한국말로 요약해줘 - "` vs production `url + " 한국말로 요약해줘"`) which had made the e2e suite red at HEAD; both e2e files now derive the suffix from `content.js` via `readPasteSuffix()`.|Lifetime Linux log showed 153 `done; sent` vs 150 `URL copy failed` — but clustered (06-13: 54, 09-18: 14, 10-16: 38, 10-22: 20) with clean days between, i.e. bimodal environment failures rather than random flakiness, so they are diagnosable but were only ever diagnosed by hand. Every previous fix was verified once, manually; there was no CI and `npm test` needed a live desktop for its deepest steps. The unit harness closes that: it covers the orchestration logic (sentinel reset, retry, failure restore, trigger char, backend choice) with zero desktop dependencies, so regressions surface on push instead of on the next field report. Mutation-tested to confirm it fails when it should: removing the sentinel reset produces 4 failures including "stale clipboard must not count as success", and forcing the `wl` backend produces the xclip-preference failure. The macOS checker replaces a prose instruction that two separate sessions followed but the file still regressed twice; it is verified against a simulated pre-2026-07-17 live file (7 drift failures) and against an in-sync file with unrelated automation appended (passes), and it correctly ignores `CONFIG_VERSION` because the regressed copy reported a *higher* version. |
+
 
 ## Diagnostic flags
 - **Extension**: set `localStorage.__copyurlDebug = "1"` on a youtube.com page (persisted). Enables ring buffer at `window.__copyurlLog` (last 200 events) and `console.debug("[CopyURL]", ...)` output. Title beacon is **always on** (cheap, invisible suffix using zero-width char + tag).
@@ -106,16 +108,33 @@ After every F24 keydown the extension processes, it appends ` ​[CU:STATE]` (ze
 - `#MaxThreadsBuffer true` queues a second Windows Alt+A press while the first handler is still running.
 - Windows Alt+Z (Aside): see the 2026-10-13 decision-log rows. Verified end-to-end on a Netflix tab (injected keys); YouTube path verified through the helper and via real hotkey use in the log (`Sent to Aside side panel.`).
 ## Next steps (resume here)
+Backlog now lives in GitHub Issues (https://github.com/vascode2/YT-to-Gemini-Summarizer-Helper/issues) so it can be assigned, closed and referenced from commits. The items below are the platform *state*, not the to-do list.
+
 1. **Windows**: reload [copy.ahk](copy.ahk) from the tray (or launch it detached with `/force`). **Alt+A** → Gemini desktop app (PWA only if the app is absent); **Alt+Z** → Aside AI side panel (YouTube hover → summary, Netflix → interpret current line). Keep Gemini running for Alt+A; Aside needs a working AI provider for Alt+Z.
-2. **macOS**: `diff Mac/hammerspoon/init.lua ~/.hammerspoon/init.lua` — the live file is known to silently diverge (2026-07-26/27 entries); re-sync the CopyURL section if it has regressed. Gemini target is now the native `com.google.GeminiMacOS` app.
+2. **macOS**: run `Mac/check_live_sync.sh` **before** touching anything — the live `~/.hammerspoon/init.lua` is a real file (not a symlink) that also holds unrelated automation, and it has silently reverted the CopyURL section at least twice (2026-07-26/27), each time while reporting a *higher* `CONFIG_VERSION`. The script checks content, not versions; `--section-diff` prints what's missing. Gemini target is the native `com.google.GeminiMacOS` app.
 3. **Linux**: see [Linux/README.md](Linux/README.md) for the Ubuntu/GNOME Wayland setup (`ydotool` + `wl-clipboard` + `xclip` + Activate-Window-By-Title GNOME extension). YouTube, the helper and the Gemini web app must be in the **same Chrome profile** (the paste handoff goes through `chrome.storage`). On this machine that is Aside's **Personal** profile (`Default`); keep Ezurio (`Profile 2`) windows closed, because Aside starts in the last-used profile (Aside-Linux `c367850`) and Ezurio has no Gemini web app. Verified 2026-10-22: Alt+A pastes into Gemini without window flicker (`copyurl.sh` v7, ext 1.3.1). If it breaks again, check `Local State` `profile.last_used` and the `copyurlTrace` `at:` field first (see the 2026-10-22 rows).
-4. Move to Phase 2 (stress harness) — the deferred original plan.
-5. **Backlog (Windows, Alt+Z → Aside):** user reports Alt+Z doesn't reliably open a *closed* Aside AI side panel and fill the prompt (parked 2026-10-13). The panel is opened with Ctrl+S (worked once right after an Aside restart); the UIA/key hangs found later (see the reliability row) may have been the real cause but the closed-panel path has NOT been re-run end-to-end since the fixes — start there; failures now log `Aside UIA helper trace: …` in `copyurl_log.txt`. Also known: in Aside split view the window title follows the focused pane, so Alt+Z reports "Active tab is not YouTube" when the Chats pane has focus (UIA `SelectionItem.Select()` on the YouTube tab does not move focus; a real click on the page could open the video).
+
+### Open issues
+| # | Title | Platform |
+|---|---|---|
+| [#2](https://github.com/vascode2/YT-to-Gemini-Summarizer-Helper/issues/2) | Alt+Z does not reliably open a closed Aside side panel | Windows |
+| [#3](https://github.com/vascode2/YT-to-Gemini-Summarizer-Helper/issues/3) | Phase 2 stress harness (never implemented) | all |
+| [#4](https://github.com/vascode2/YT-to-Gemini-Summarizer-Helper/issues/4) | Run the live-config drift check in CI (needs a macOS runner) | macOS |
+| [#5](https://github.com/vascode2/YT-to-Gemini-Summarizer-Helper/issues/5) | `check_deps` still requires wl-clipboard; missing xclip silently reintroduces flicker | Linux |
+
+## Testing
+`npm test` (= `scripts/run_tests.sh`) runs, in order: JS syntax, manifest validity, the headless `gemini.js` DOM mock, the real unpacked extension end-to-end (puppeteer-core), and the **hermetic Linux orchestrator tests**. The last one needs no desktop — it runs the genuine `Linux/copyurl.sh` with shimmed `ydotool`/`xclip`/`wl-*`/`gdbus` and a file-backed clipboard, covering success, retry, total failure (clipboard restored), the sentinel/stale-clipboard false positive, `--aside`, and backend selection.
+
+CI ([.github/workflows/tests.yml](.github/workflows/tests.yml)) runs that suite on every push/PR. Two things deliberately SKIP in CI: the full-system test (`COPYURL_FULL_SYSTEM=1`, needs Wayland + ydotoold + a headful browser) and `Mac/check_live_sync.sh` (needs the live `~/.hammerspoon/init.lua` — see issue #4).
+
+The e2e tests read the prompt wording from `content.js` (`readPasteSuffix()`) instead of hardcoding it, so rewording cannot silently desync the test — while a wrong/stale URL still fails.
+
 ## Files touched per phase
 - **Phase 0**: `CLAUDE.md`, `docs/troubleshooting.md`.
 - **Phase 1**: `content.js`, `copy.ahk`.
-- **Phase 2** (planned): `scripts/stress_copy.ahk`, `scripts/analyze_stress.py`.
+- **Phase 2** (issue #3): `scripts/stress_copy.ahk`, `scripts/analyze_stress.py`.
 - **Phase 3** (planned): `content.js`, `copy.ahk`.
+- **Testability (2026-10-26)**: `tests/linux/run_copyurl_unit.sh`, `scripts/run_tests.sh`, `.github/workflows/tests.yml`, `Mac/check_live_sync.sh`, `tests/e2e/run_e2e.mjs`, `tests/e2e/run_full_system.mjs`.
 
 ## Platform ports (kept in separate folders, extension is shared)
 - macOS port: `Mac/` (Hammerspoon, **Option+Z**).
@@ -130,23 +149,27 @@ After every F24 keydown the extension processes, it appends ` ​[CU:STATE]` (ze
 <!-- This block is regenerated by .githooks/pre-commit on every commit.
      Do not edit by hand — your changes will be overwritten. -->
 
-**Last updated:** `2026-10-23T01:49:21Z`
+**Last updated:** `2026-10-26T15:26:02Z`
 
 **Recent commits (last 5 on HEAD):**
 
-- `dfcdc6b` feat(linux): Aside Linux support and Alt+Z to the Aside side panel (1.3.0) _(7 days ago)_
-- `e7c9b1a` feat(ahk): Alt+Z Netflix line interpretation + Aside panel helper reliability; docs _(10 days ago)_
-- `b1d1285` feat(ahk): Aside browser support + Alt+Z sends to Aside AI side panel _(10 days ago)_
-- `780f998` feat(ahk): send Alt+A prompts to the Gemini desktop app via UI Automation _(11 days ago)_
-- `7aa455a` feat: switch Windows hotkey to Alt+A _(11 days ago)_
+- `8e37737` fix(linux): Alt+A under Aside profiles; no clipboard-poll flicker (1.3.1, copyurl.sh v7) _(4 days ago)_
+- `dfcdc6b` feat(linux): Aside Linux support and Alt+Z to the Aside side panel (1.3.0) _(10 days ago)_
+- `e7c9b1a` feat(ahk): Alt+Z Netflix line interpretation + Aside panel helper reliability; docs _(13 days ago)_
+- `b1d1285` feat(ahk): Aside browser support + Alt+Z sends to Aside AI side panel _(13 days ago)_
+- `780f998` feat(ahk): send Alt+A prompts to the Gemini desktop app via UI Automation _(2 weeks ago)_
 
 **Files in the pending commit:**
 
 - `CLAUDE.md`
-- `content.js`
-- `Linux/copyurl.sh`
-- `Linux/README.md`
+- `.github/workflows/tests.yml`
+- `Mac/check_live_sync.sh`
+- `Mac/README.md`
 - `manifest.json`
 - `package.json`
 - `package-lock.json`
+- `scripts/run_tests.sh`
+- `tests/e2e/run_e2e.mjs`
+- `tests/e2e/run_full_system.mjs`
+- `tests/linux/run_copyurl_unit.sh`
 <!-- AUTO:RECENT-ACTIVITY:END -->

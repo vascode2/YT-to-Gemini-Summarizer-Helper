@@ -1,0 +1,264 @@
+#!/usr/bin/env bash
+# Hermetic unit tests for the Linux orchestrator (Linux/copyurl.sh).
+#
+# The other Linux tests need a real desktop: run_e2e.mjs needs a browser,
+# run_full_system.mjs needs Wayland + ydotoold. This one needs nothing but bash.
+# It runs the GENUINE copyurl.sh with every external program replaced by a PATH
+# shim (ydotool, xclip, wl-copy, wl-paste, gdbus, notify-send) and a clipboard
+# that is just a file, then asserts on the script's exit code, log lines, and
+# the exact clipboard writes it performed.
+#
+# Covered (all of these have broken in the field at least once):
+#   - success path: sentinel reset -> trigger -> youtube URL detected -> Gemini focused
+#   - retry: first trigger ignored, second succeeds
+#   - total failure: exit 1, "URL copy failed", user's clipboard restored
+#   - same video twice in a row (the sentinel's whole reason to exist)
+#   - --aside: trigger "[" instead of "]", no Gemini focus
+#   - clipboard backend selection: xclip when DISPLAY+xclip, wl-* otherwise
+#
+# Usage: tests/linux/run_copyurl_unit.sh        (exit 0 = all pass)
+
+set -uo pipefail
+
+cd "$(dirname "$0")/../.." || exit 2
+ROOT="$PWD"
+SCRIPT="$ROOT/Linux/copyurl.sh"
+URL_A="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+URL_B="https://www.youtube.com/watch?v=aaaaaaaaaaa"
+
+fail=0
+note() { printf '\n=== %s ===\n' "$*"; }
+ok()   { printf '  PASS  %s\n' "$*"; }
+bad()  { printf '  FAIL  %s\n' "$*"; fail=1; }
+
+[[ -f "$SCRIPT" ]] || { bad "missing $SCRIPT"; exit 1; }
+
+# ---------------------------------------------------------------------------
+# Sandbox: shims + a file-backed clipboard, one directory per scenario.
+# ---------------------------------------------------------------------------
+new_sandbox() {
+  SB="$(mktemp -d "${TMPDIR:-/tmp}/cu_unit.XXXXXX")"
+  mkdir -p "$SB/bin" "$SB/state"
+  : >"$SB/clip"          # current clipboard contents
+  : >"$SB/clip_writes"   # every payload written by clip_set, one per line
+  : >"$SB/shim_calls"    # every shim invocation
+  : >"$SB/triggers"      # every character ydotool was asked to type
+  : >"$SB/responses"     # one line per trigger: "-" = ignore, else the URL to copy
+  echo 0 >"$SB/trigger_count"
+
+  # gdbus: Activate Window By Title. Report success and a sort order.
+  cat >"$SB/bin/gdbus" <<'SH'
+#!/usr/bin/env bash
+echo "gdbus $*" >>"$CU_SB/shim_calls"
+case "$*" in
+  *setSortOrder*) echo "('highest_user_time',)" ;;
+  *)              echo "(true,)" ;;
+esac
+SH
+
+  # ydotool: record the typed char, then play the next scripted response.
+  cat >"$SB/bin/ydotool" <<'SH'
+#!/usr/bin/env bash
+echo "ydotool $*" >>"$CU_SB/shim_calls"
+[[ "${1:-}" == "type" ]] || exit 0
+printf '%s' "${2:-}" >>"$CU_SB/triggers"
+n=$(( $(cat "$CU_SB/trigger_count") + 1 ))
+echo "$n" >"$CU_SB/trigger_count"
+resp="$(sed -n "${n}p" "$CU_SB/responses" 2>/dev/null)"
+if [[ -n "$resp" && "$resp" != "-" ]]; then printf '%s' "$resp" >"$CU_SB/clip"; fi
+exit 0
+SH
+
+  # xclip: -o prints the clipboard, -i stores stdin (recording each write).
+  cat >"$SB/bin/xclip" <<'SH'
+#!/usr/bin/env bash
+echo "xclip $*" >>"$CU_SB/shim_calls"
+case "${1:-}" in
+  -o) cat "$CU_SB/clip" 2>/dev/null; exit 0 ;;
+  -i) payload="$(cat)"
+      printf '%s' "$payload" >"$CU_SB/clip"
+      printf '%s\n' "$payload" >>"$CU_SB/clip_writes"
+      exit 0 ;;
+esac
+exit 0
+SH
+
+  # wl-clipboard fallback backend.
+  cat >"$SB/bin/wl-paste" <<'SH'
+#!/usr/bin/env bash
+echo "wl-paste $*" >>"$CU_SB/shim_calls"
+cat "$CU_SB/clip" 2>/dev/null
+exit 0
+SH
+  cat >"$SB/bin/wl-copy" <<'SH'
+#!/usr/bin/env bash
+echo "wl-copy $*" >>"$CU_SB/shim_calls"
+payload="$(cat)"
+printf '%s' "$payload" >"$CU_SB/clip"
+printf '%s\n' "$payload" >>"$CU_SB/clip_writes"
+exit 0
+SH
+
+  cat >"$SB/bin/notify-send" <<'SH'
+#!/usr/bin/env bash
+echo "notify-send $*" >>"$CU_SB/shim_calls"
+exit 0
+SH
+
+  chmod +x "$SB"/bin/*
+
+  # Restricted coreutils PATH: only the utilities copyurl.sh actually calls.
+  # Without this, "xclip is absent" can't be simulated — the real /usr/bin/xclip
+  # would be found and the wl-clipboard fallback would never be exercised.
+  mkdir -p "$SB/core"
+  for u in bash date stat mkdir mv sed cat grep id sleep timeout bc dirname \
+           basename uname mktemp tail head awk tr sort; do
+    src="$(command -v "$u" 2>/dev/null)" && ln -s "$src" "$SB/core/$u"
+  done
+  export CU_SB="$SB"
+  export XDG_STATE_HOME="$SB/state"
+  export COPYURL_LOG_FILE="$SB/copyurl_log.txt"
+  export COPYURL_VERBOSE=1
+  # Collapse the real-time waits; the logic under test is the loop, not the clock.
+  export COPYURL_TRIGGER_SETTLE_DELAY=0
+  export COPYURL_BROWSER_FOCUS_DELAY=0
+  export COPYURL_GEMINI_FOCUS_DELAY=0
+  export COPYURL_CLIP_TIMEOUT=0.2
+  export COPYURL_CLIP_POLL=0.01
+  export COPYURL_NOTIFY=0
+  # Activate Window By Title needs a session bus; the shim ignores the call.
+  export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$SB/no-bus}"
+  rm -f "$COPYURL_LOG_FILE"
+}
+
+# run_flow_scenario <clipboard-before> <responses-file-content> [args...]
+run_flow_scenario() {
+  local before="$1" responses="$2"
+  shift 2
+  printf '%s' "$before" >"$SB/clip"
+  printf '%s\n' "$responses" >"$SB/responses"
+  echo 0 >"$SB/trigger_count"   # each scenario starts at its first trigger
+  : >"$SB/shim_calls"
+  : >"$SB/triggers"
+  : >"$SB/clip_writes"
+  rm -f "$COPYURL_LOG_FILE"
+  PATH="$SB/bin:$SB/core" bash "$SCRIPT" "$@" >"$SB/stdout" 2>"$SB/stderr"
+  RC=$?
+}
+
+log_has()     { grep -qF -- "$1" "$COPYURL_LOG_FILE" 2>/dev/null; }
+expect_log()  { if log_has "$1"; then ok "log: $1"; else bad "log missing: $1"; fi; }
+expect_nolog() { if log_has "$1"; then bad "log should NOT contain: $1"; else ok "log absent: $1"; fi; }
+expect_rc()   { if [[ "$RC" == "$1" ]]; then ok "exit $1"; else bad "exit $RC (expected $1)"; fi; }
+expect_clip() { local got; got="$(cat "$SB/clip")"
+  if [[ "$got" == "$1" ]]; then ok "clipboard = $1"; else bad "clipboard = '$got' (expected '$1')"; fi; }
+
+# ---------------------------------------------------------------------------
+note "syntax + help"
+if bash -n "$SCRIPT"; then ok "bash -n Linux/copyurl.sh"; else bad "bash -n Linux/copyurl.sh"; fi
+new_sandbox
+PATH="$SB/bin:$SB/core" bash "$SCRIPT" --help >"$SB/help" 2>&1
+if grep -q -- '--aside' "$SB/help"; then ok "--help lists --aside"; else bad "--help output unexpected"; fi
+
+# ---------------------------------------------------------------------------
+note "success path (xclip backend)"
+new_sandbox
+run_flow_scenario "user-clipboard-before" "$URL_A"
+expect_rc 0
+expect_log "Alt+A fired (target=gemini"
+expect_log "copy attempt 1: typing trigger ']'"
+expect_log "copy attempt 1: clipboard changed -> $URL_A"
+expect_log "done; sent url=$URL_A"
+expect_clip "$URL_A"
+if grep -q '^xclip -o' "$SB/shim_calls" && ! grep -q '^wl-paste' "$SB/shim_calls"; then
+  ok "used xclip (no focus-stealing wl-paste)"
+else
+  bad "expected xclip polling, got: $(grep -E '^(xclip|wl-paste)' "$SB/shim_calls" | sort -u | tr '\n' ' ')"
+fi
+# The sentinel must be written BEFORE the trigger, or a same-URL re-copy is
+# undetectable and every second press times out.
+first_write="$(sed -n 1p "$SB/clip_writes")"
+if [[ "$first_write" == __copyurl_sentinel_* ]]; then
+  ok "clipboard reset to a sentinel before the trigger"
+else
+  bad "first clipboard write was not a sentinel: '$first_write'"
+fi
+if [[ "$(cat "$SB/triggers")" == "]" ]]; then ok "typed ']' once"; else bad "typed '$(cat "$SB/triggers")' (expected ']')"; fi
+if log_has "activateByWmClass('chrome-gdfaincndogidkdcdkhapmbffkckdkhn-Profile_2')"; then
+  ok "tried the non-Default Gemini profile first"
+else
+  bad "Gemini profile-2 window was not tried first"
+fi
+
+# ---------------------------------------------------------------------------
+note "retry: first trigger ignored, second succeeds"
+new_sandbox
+run_flow_scenario "user-clipboard-before" "-
+$URL_B"
+expect_rc 0
+expect_log "copy attempt 1: timed out after 0.2s"
+expect_log "copy attempt 2: clipboard changed -> $URL_B"
+expect_log "done; sent url=$URL_B"
+expect_clip "$URL_B"
+
+# ---------------------------------------------------------------------------
+note "total failure: exit 1 + user clipboard restored"
+new_sandbox
+run_flow_scenario "my-precious-text" "-
+-"
+expect_rc 1
+expect_log "copy attempt 2: timed out"
+expect_log "ERROR: URL copy failed."
+expect_clip "my-precious-text"
+if grep -q '^notify-send' "$SB/shim_calls"; then ok "error notified"; else bad "error did not notify"; fi
+
+# ---------------------------------------------------------------------------
+note "stale clipboard must not count as success (sentinel's real purpose)"
+# The clipboard already holds a youtube URL and the trigger does nothing. Without
+# the sentinel reset the poll would see "a youtube URL is present" and report a
+# copy that never happened, sending a stale video to Gemini.
+new_sandbox
+run_flow_scenario "$URL_A" "-
+-"
+expect_rc 1
+expect_log "ERROR: URL copy failed."
+expect_nolog "clipboard changed ->"
+expect_clip "$URL_A"
+
+# ---------------------------------------------------------------------------
+note "same video twice in a row (sentinel regression)"
+new_sandbox
+run_flow_scenario "x" "$URL_A"
+if [[ "$RC" == 0 ]] && log_has "done; sent url=$URL_A"; then ok "first copy ok"; else bad "first copy failed (rc=$RC)"; fi
+: >"$COPYURL_LOG_FILE"
+run_flow_scenario "$URL_A" "$URL_A"   # clipboard ALREADY holds the URL
+if [[ "$RC" == 0 ]] && log_has "clipboard changed -> $URL_A"; then
+  ok "second copy of the same URL still detected"
+else
+  bad "re-copying the same URL timed out (sentinel broken?)"
+fi
+
+# ---------------------------------------------------------------------------
+note "--aside: '[' trigger, no Gemini focus"
+new_sandbox
+run_flow_scenario "user-clipboard-before" "$URL_A" --aside
+expect_rc 0
+expect_log "Alt+Z fired (target=aside"
+expect_log "copy attempt 1: typing trigger '['"
+expect_log "done; sent to Aside url=$URL_A"
+expect_nolog "activateByWmClass('chrome-gdfaincndogidkdcdkhapmbffkckdkhn-Profile_2')"
+if [[ "$(cat "$SB/triggers")" == "[" ]]; then ok "typed '['"; else bad "typed '$(cat "$SB/triggers")' (expected '[')"; fi
+
+# ---------------------------------------------------------------------------
+note "backend selection: wl-* when xclip is absent"
+new_sandbox
+rm -f "$SB/bin/xclip"
+run_flow_scenario "user-clipboard-before" "$URL_A"
+expect_rc 0
+if grep -q '^wl-paste' "$SB/shim_calls"; then ok "fell back to wl-paste"; else bad "wl-paste fallback not used"; fi
+expect_clip "$URL_A"
+
+# ---------------------------------------------------------------------------
+note "Summary"
+if (( fail == 0 )); then echo "  ALL GREEN"; else echo "  FAILURES ABOVE"; fi
+exit "$fail"

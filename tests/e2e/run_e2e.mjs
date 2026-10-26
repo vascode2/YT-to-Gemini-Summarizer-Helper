@@ -24,7 +24,15 @@ import puppeteer from "puppeteer-core";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..", "..");
 const FIXTURES = path.join(__dirname, "fixtures");
-const PASTE_PREFIX = "한국말로 요약해줘 - ";
+// The prompt format is owned by content.js (PASTE_SUFFIX = " 한국말로 요약해줘").
+// Read it from the source instead of hardcoding, so changing the wording cannot
+// silently desync the test from production.
+function readPasteSuffix() {
+  const src = fs.readFileSync(path.join(ROOT, "content.js"), "utf8");
+  const m = src.match(/const\s+PASTE_SUFFIX\s*=\s*"([^"]*)"/);
+  if (!m) throw new Error("content.js: PASTE_SUFFIX not found");
+  return m[1];
+}
 
 // ---- tiny helpers ----------------------------------------------------------
 const log = (...a) => console.log("[e2e]", ...a);
@@ -34,6 +42,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function findBrave() {
   const candidates = [
     process.env.BRAVE_PATH,
+    // GitHub Actions' setup-chrome exposes the installed binary here.
+    process.env.CHROME_PATH,
     "/usr/bin/brave-browser",
     "/usr/bin/brave",
     "/usr/bin/google-chrome",
@@ -162,7 +172,7 @@ async function main() {
     const gem = await gemini.evaluate(() => window.__geminiState());
     results.gemini = gem;
 
-    const expected = PASTE_PREFIX + "https://www.youtube.com/watch?v=VIDEO_BBBBBBB";
+    const expected = "https://www.youtube.com/watch?v=VIDEO_BBBBBBB" + readPasteSuffix();
     if (gem.editorText === expected) log("  PASS  Gemini composer got the correct (live-hover) URL");
     else fail(`Gemini editor text wrong.\n        expected: ${JSON.stringify(expected)}\n        got:      ${JSON.stringify(gem.editorText)}`);
 

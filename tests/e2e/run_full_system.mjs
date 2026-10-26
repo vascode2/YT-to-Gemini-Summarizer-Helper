@@ -33,7 +33,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..", "..");
 const FIXTURES = path.join(__dirname, "fixtures");
 const COPYURL_SH = path.join(ROOT, "Linux", "copyurl.sh");
-const PASTE_PREFIX = "한국말로 요약해줘 - ";
+// The prompt format is owned by content.js (PASTE_SUFFIX = " 한국말로 요약해줘").
+// Read it from the source instead of hardcoding, so changing the wording cannot
+// silently desync the test from production.
+function readPasteSuffix() {
+  const src = fs.readFileSync(path.join(ROOT, "content.js"), "utf8");
+  const m = src.match(/const\s+PASTE_SUFFIX\s*=\s*"([^"]*)"/);
+  if (!m) throw new Error("content.js: PASTE_SUFFIX not found");
+  return m[1];
+}
 
 const log = (...a) => console.log("[full]", ...a);
 const fail = (m) => { console.error("\n  FAIL  " + m + "\n"); process.exitCode = 1; };
@@ -229,7 +237,7 @@ async function main() {
     await sleep(1500);
     const gem = await gemini.evaluate(() => window.__geminiState());
     results.gemini = gem;
-    const expectedText = PASTE_PREFIX + copiedUrl;
+    const expectedText = copiedUrl + readPasteSuffix();
     if (gem.editorText === expectedText) log("  PASS  Gemini composer got the Korean prompt + the copied URL");
     else fail(`Gemini editor wrong.\n        expected: ${JSON.stringify(expectedText)}\n        got:      ${JSON.stringify(gem.editorText)}`);
     if (gem.sendClicked === 1) log("  PASS  Gemini Send clicked once");
