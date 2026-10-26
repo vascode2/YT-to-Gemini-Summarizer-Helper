@@ -189,7 +189,18 @@ async function main() {
         await activateWindow("YTFIXTURE");
         await sleep(600); // let the compositor settle focus before ydotool types
         await new Promise((resolve) => {
-          const p = spawn("bash", [COPYURL_SH], { env: { ...process.env, COPYURL_VERBOSE: "1", COPYURL_YOUTUBE_NEEDLE: "YTFIXTURE" } });
+          const p = spawn("bash", [COPYURL_SH], {
+            env: {
+              ...process.env,
+              COPYURL_VERBOSE: "1",
+              COPYURL_YOUTUBE_NEEDLE: "YTFIXTURE",
+              // Keep harness runs out of the production log. Otherwise they
+              // interleave with real presses and skew the reliability numbers
+              // scripts/analyze_log.py reports (found: 15 YTFIXTURE lines had
+              // already leaked into the field log).
+              COPYURL_LOG_FILE: path.join(fs.mkdtempSync(path.join(os.tmpdir(), "copyurl-log-")), "harness.log"),
+            },
+          });
           p.on("close", () => resolve());
           setTimeout(() => p.kill("SIGKILL"), 14000);
         });
@@ -230,7 +241,18 @@ async function main() {
         await sleep(500);
         // NB: no activateWindow("YTFIXTURE") here — copyurl.sh must do it.
         await new Promise((resolve) => {
-          const p = spawn("bash", [COPYURL_SH], { env: { ...process.env, COPYURL_VERBOSE: "1", COPYURL_YOUTUBE_NEEDLE: "YTFIXTURE" } });
+          const p = spawn("bash", [COPYURL_SH], {
+            env: {
+              ...process.env,
+              COPYURL_VERBOSE: "1",
+              COPYURL_YOUTUBE_NEEDLE: "YTFIXTURE",
+              // Keep harness runs out of the production log. Otherwise they
+              // interleave with real presses and skew the reliability numbers
+              // scripts/analyze_log.py reports (found: 15 YTFIXTURE lines had
+              // already leaked into the field log).
+              COPYURL_LOG_FILE: path.join(fs.mkdtempSync(path.join(os.tmpdir(), "copyurl-log-")), "harness.log"),
+            },
+          });
           p.on("close", () => resolve());
           setTimeout(() => p.kill("SIGKILL"), 14000);
         });
