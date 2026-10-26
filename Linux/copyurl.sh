@@ -41,7 +41,7 @@ set -uo pipefail
 # ----------------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------------
-CONFIG_VERSION="v9 2026-10-26 failure-diagnosis"
+CONFIG_VERSION="v10 2026-10-26 focus-aware-diagnosis"
 
 # Substring matched (case-insensitive on the extension side) against window
 # titles to find the Gemini window. The PWA's title contains "Gemini".
@@ -355,6 +355,19 @@ diagnose_copy_failure() {
 
   if (( ${#files[@]} == 0 )); then
     log "diagnosis: no extension trace written since the press"
+    if (( ${ACTIVATION_OK:-0} )); then
+      # The window came forward, so the keystroke had a browser to land in but
+      # no page received it. In Aside's split view the window can be raised
+      # while its CHATS pane keeps keyboard focus, so the trigger types into
+      # that pane instead of the YouTube tab. This is by far the most common
+      # real-world failure (75 of 80 in the field log), and calling it "the
+      # extension did not respond" sends the reader to reload a tab that was
+      # never the problem.
+      log "diagnosis: the browser window WAS raised, so the trigger was typed into it but no page saw it"
+      log "diagnosis: keyboard focus is on another pane/tab of that window (Aside split view: the Chats pane keeps focus)"
+      DIAGNOSIS_HINT="Click the YouTube page itself (so the video page has focus, not a side pane), then press Alt+A again."
+      return 0
+    fi
     log "diagnosis: the trigger never reached content.js (extension disabled or removed from this profile? wrong browser profile?)"
     DIAGNOSIS_HINT="The extension did not respond. Is it enabled in this browser profile, and is a YouTube tab open?"
     return 0
@@ -443,7 +456,13 @@ copy_url_from_browser() {
   # Bring Brave/YouTube to the front FIRST so the trigger keystroke is delivered
   # to Brave even when another window currently holds keyboard focus. The mouse
   # cursor is not moved, so content.js still sees the hovered thumbnail.
+  # ACTIVATION_OK feeds the failure diagnosis: raising the browser window is
+  # NOT the same as giving the YouTube tab keyboard focus, and only the latter
+  # lets the trigger keystroke reach content.js. Keeping the two apart stops the
+  # diagnosis from blaming the extension when the key went to a different pane.
+  ACTIVATION_OK=0
   if activate_youtube; then
+    ACTIVATION_OK=1
     sleep "$BROWSER_FOCUS_DELAY"
   fi
   # Brief settle so a still-held Alt (from Alt+A) is released and ydotool warms up.

@@ -54,9 +54,11 @@ new_sandbox() {
   cat >"$SB/bin/gdbus" <<'SH'
 #!/usr/bin/env bash
 echo "gdbus $*" >>"$CU_SB/shim_calls"
+# CU_ACTIVATION_FAILS=1 makes every activation report not-found, so the
+# "browser window never came forward" branch of the diagnosis can be tested.
 case "$*" in
   *setSortOrder*) echo "('highest_user_time',)" ;;
-  *)              echo "(true,)" ;;
+  *) [[ "${CU_ACTIVATION_FAILS:-0}" == "1" ]] && echo "(false,)" || echo "(true,)" ;;
 esac
 SH
 
@@ -369,13 +371,16 @@ other_ext_write() {
 }
 
 note "diagnosis: key never reached the page (no trace written)"
+# The window raises fine here, so this is the focus case, not a dead extension:
+# the two used to share one message, which blamed the extension for a pane that
+# simply had the focus. The activation-failure case below covers the other side.
 new_sandbox
 run_flow_scenario "before" "-
 -"
 expect_rc 1
 expect_log "diagnosis: no extension trace written since the press"
-expect_log "the trigger never reached content.js"
-expect_log "The extension did not respond. Is it enabled in this browser profile"
+expect_log "the browser window WAS raised"
+expect_log "Click the YouTube page itself"
 
 note "diagnosis: no video under the cursor"
 new_sandbox
@@ -414,14 +419,37 @@ expect_rc 1
 expect_log "the copy failed after the key arrived"
 expect_log "Check that xclip/wl-clipboard works"
 
+note "diagnosis: trigger typed into the raised window but no page saw it"
+new_sandbox
+run_flow_scenario "before" "-
+-"
+expect_rc 1
+expect_log "no extension trace written since the press"
+expect_log "the browser window WAS raised"
+expect_log "keyboard focus is on another pane/tab"
+expect_log "Click the YouTube page itself"
+expect_nolog "The extension did not respond"
+
+note "diagnosis: activation failed, so the extension is not to blame for silence"
+new_sandbox
+CU_ACTIVATION_FAILS=1 run_flow_scenario "before" "-
+-"
+expect_rc 1
+expect_log "no extension trace written since the press"
+expect_log "The extension did not respond"
+expect_nolog "the browser window WAS raised"
+
 note "diagnosis: another extension writing must not look like ours responding"
 new_sandbox
 other_ext_write
 run_flow_scenario "before" "-
 -"
 expect_rc 1
+# Ours wrote nothing, so the "no trace" verdict must stand. Reading the other
+# extension's file would instead produce "no trigger was recorded for this
+# press", i.e. it would claim our extension answered and ignored the key.
 expect_log "no extension trace written since the press"
-expect_log "The extension did not respond"
+expect_nolog "no trigger was recorded for this press"
 
 note "diagnosis: extension storage touched but no trigger recorded"
 new_sandbox
