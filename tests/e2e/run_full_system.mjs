@@ -55,12 +55,33 @@ function sh(cmd, args, opts = {}) {
   });
 }
 
-function findBrave() {
-  for (const c of [process.env.BRAVE_PATH, "/usr/bin/brave-browser", "/usr/bin/brave",
-    "/usr/bin/google-chrome", "/usr/bin/chromium"].filter(Boolean)) {
-    try { fs.accessSync(c, fs.constants.X_OK); return c; } catch {}
+// Branded Google Chrome removed --load-extension outright (crbug 401529219), so
+// the unpacked extension silently never loads there. Chromium, Brave and Chrome
+// for Testing still honor it. See run_e2e.mjs for the full explanation.
+function isBrandedChrome(bin) {
+  try {
+    const v = execFileSync(bin, ["--version"], {
+      encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return /^Google Chrome /i.test(v);
+  } catch {
+    return false;
   }
-  throw new Error("No Chromium-based browser found (set BRAVE_PATH).");
+}
+
+function findBrave() {
+  for (const c of [process.env.CHROME_PATH, process.env.BRAVE_PATH,
+    "/usr/bin/brave-browser", "/usr/bin/brave",
+    "/usr/bin/chromium", "/usr/bin/google-chrome"].filter(Boolean)) {
+    try { fs.accessSync(c, fs.constants.X_OK); } catch { continue; }
+    if (isBrandedChrome(c)) { log(`skipping ${c}: branded Chrome ignores --load-extension`); continue; }
+    return c;
+  }
+  throw new Error(
+    "No browser found that supports --load-extension. Install Chromium, Brave, " +
+    "or Chrome for Testing (npx @puppeteer/browsers install chrome@stable), " +
+    "or point CHROME_PATH at one."
+  );
 }
 
 function startServer() {
@@ -119,8 +140,6 @@ async function main() {
       `--disable-extensions-except=${extDir}`,
       `--load-extension=${extDir}`,
       "--no-first-run", "--no-default-browser-check",
-      // Chrome 137+ silently ignores --load-extension unless this is present.
-      "--disable-features=DisableLoadExtensionCommandLineSwitch",
       "--new-window", "--window-size=1100,800", "--window-position=80,80",
     ],
   });

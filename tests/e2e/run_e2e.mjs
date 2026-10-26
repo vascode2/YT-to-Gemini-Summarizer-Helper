@@ -15,6 +15,7 @@
 // Exit 0 = pass, non-zero = failure (with a diagnostic dump).
 
 import http from "node:http";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -39,21 +40,65 @@ const log = (...a) => console.log("[e2e]", ...a);
 const fail = (msg) => { console.error("\n  FAIL  " + msg + "\n"); process.exitCode = 1; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Chrome/Chromium build that can actually load an unpacked extension.
+//
+// Branded Google Chrome removed --load-extension outright (crbug 401529219):
+// as of Chrome 154 it is hardcoded off and the old
+// --disable-features=DisableLoadExtensionCommandLineSwitch escape hatch no
+// longer exists, so the extension silently never loads. Chrome for Testing,
+// Chromium and Brave still honor the flag. Prefer those, and refuse a binary
+// that would silently no-op rather than reporting a confusing "toast null".
 function findBrave() {
   const candidates = [
-    process.env.BRAVE_PATH,
-    // GitHub Actions' setup-chrome exposes the installed binary here.
     process.env.CHROME_PATH,
+    process.env.BRAVE_PATH,
+    // Puppeteer's own cache (npx @puppeteer/browsers install chrome@stable).
+    ...puppeteerCacheChromes(),
     "/usr/bin/brave-browser",
     "/usr/bin/brave",
-    "/usr/bin/google-chrome",
     "/usr/bin/chromium",
     "/usr/bin/chromium-browser",
+    "/usr/bin/google-chrome",
   ].filter(Boolean);
   for (const c of candidates) {
-    try { fs.accessSync(c, fs.constants.X_OK); return c; } catch {}
+    try {
+      fs.accessSync(c, fs.constants.X_OK);
+    } catch {
+      continue;
+    }
+    if (isBrandedChrome(c)) {
+      log(`skipping ${c}: branded Chrome ignores --load-extension`);
+      continue;
+    }
+    return c;
   }
-  throw new Error("No Chromium-based browser found (set BRAVE_PATH).");
+  throw new Error(
+    "No browser found that supports --load-extension. Install Chromium, Brave, " +
+    "or Chrome for Testing (npx @puppeteer/browsers install chrome@stable), " +
+    "or point CHROME_PATH at one."
+  );
+}
+
+// Branded Google Chrome's version resource is "Google Chrome"; Chrome for
+// Testing reports "Chrome for Testing" and Chromium reports "Chromium".
+function isBrandedChrome(bin) {
+  try {
+    const v = execFileSync(bin, ["--version"], {
+      encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return /^Google Chrome /i.test(v);
+  } catch {
+    return false;
+  }
+}
+
+// ~/.cache/puppeteer/chrome/<version>/chrome-linux64/chrome
+function puppeteerCacheChromes() {
+  const root = path.join(os.homedir(), ".cache", "puppeteer", "chrome");
+  if (!fs.existsSync(root)) return [];
+  return fs.readdirSync(root)
+    .map((v) => path.join(root, v, "chrome-linux64", "chrome"))
+    .filter((p) => fs.existsSync(p));
 }
 
 // ---- 1. static fixture server ---------------------------------------------
@@ -113,8 +158,6 @@ async function main() {
       "--disable-gpu",
       "--no-first-run",
       "--no-default-browser-check",
-      // Chrome 137+ silently ignores --load-extension unless this is present.
-      "--disable-features=DisableLoadExtensionCommandLineSwitch",
     ],
   });
 
