@@ -16,6 +16,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
+import analyze_log  # noqa: E402
 from analyze_log import parse, summarize  # noqa: E402
 
 FAIL = 0
@@ -178,6 +179,47 @@ def test_press_boundaries():
     check("second succeeded", rows[1]["ok"], True)
 
 
+def test_multiple_files():
+    print("\n=== multiple files: rotation must not merge sessions ===")
+    # Rotation renames copyurl_log.txt to copyurl_log.txt.1 and starts fresh. If
+    # the files were concatenated, the last press of the old file would absorb
+    # the outcome of the first press in the new one -- and a failure at the seam
+    # would look like a success, or vice versa.
+    old = write_tmp(
+        LINUX_FAIL.format(diagnosis="diagnosis: NO VIDEO UNDER THE CURSOR at press time", hint="h")
+    )
+    new = write_tmp(LINUX_OK)
+    try:
+        # Drive main() rather than re-implementing its loop, so the CLI path
+        # (arg parsing, per-file parse, summarise) is what gets checked.
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = analyze_log.main([old, new, "--json"])
+        check("exit 0", rc, 0)
+        import json
+
+        got = json.loads(buf.getvalue())
+        check("2 sessions across 2 files", got["total"], 2)
+        check("1 ok", got["ok"], 1)
+        check("1 failed", got["fail"], 1)
+        check("the failure kept its mode", list(got["modes"]), ["no-hover"])
+
+        # A missing file must warn but still report on the ones that exist.
+        buf = io.StringIO()
+        err = io.StringIO()
+        with redirect_stdout(buf), redirect_stderr(err):
+            rc = analyze_log.main([old, "/nonexistent-xyz", "--json"])
+        check("missing file among valid still exits 0", rc, 0)
+        check("and still counts the valid one", json.loads(buf.getvalue())["total"], 1)
+        check("the warning names the missing file", "no log at /nonexistent-xyz" in err.getvalue(), True)
+    finally:
+        os.unlink(old)
+        os.unlink(new)
+
+
 def main():
     test_linux_modes()
     test_ahk_modes()
@@ -185,6 +227,7 @@ def main():
     test_success_and_rate()
     test_since_filter()
     test_press_boundaries()
+    test_multiple_files()
     print("\n=== Summary ===")
     print("  ALL GREEN" if FAIL == 0 else "  FAILURES ABOVE")
     return FAIL

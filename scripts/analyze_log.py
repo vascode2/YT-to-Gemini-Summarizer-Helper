@@ -18,6 +18,7 @@ the press, not to the line.
 Usage:
   scripts/analyze_log.py                       # ~/.local/state/copyurl/copyurl_log.txt
   scripts/analyze_log.py path/to/copyurl_log.txt
+  scripts/analyze_log.py copyurl_log.txt.1 copyurl_log.txt   # include rotated logs
   scripts/analyze_log.py --json                # machine-readable
   scripts/analyze_log.py --since 2026-10-01    # ignore older sessions
 """
@@ -142,18 +143,32 @@ def summarize(rows: list[dict]) -> dict:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("log", nargs="?", default=DEFAULT_LOG)
+    ap.add_argument(
+        "log",
+        nargs="*",
+        default=[DEFAULT_LOG],
+        help="log file(s); rotation moves the old one to <log>.1, and each file "
+        "is parsed separately so a rotated log cannot merge with the current one",
+    )
     ap.add_argument("--since", help="only sessions on/after this YYYY-MM-DD")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of a table")
     args = ap.parse_args(argv)
 
-    if not os.path.exists(args.log):
-        print(f"no log at {args.log}", file=sys.stderr)
+    missing = [p for p in args.log if not os.path.exists(p)]
+    for p in missing:
+        print(f"no log at {p}", file=sys.stderr)
+    if len(missing) == len(args.log):
         return 2
 
-    rows = parse(args.log, args.since)
+    # Parse each file on its own: a session must never span the seam between a
+    # rotated log and the current one, or the last press of the old file would
+    # absorb the outcome lines of the first press in the new one.
+    rows = []
+    for p in args.log:
+        if os.path.exists(p):
+            rows.extend(parse(p, args.since))
     if not rows:
-        print(f"no hotkey presses found in {args.log}", file=sys.stderr)
+        print(f"no hotkey presses found in {' '.join(args.log)}", file=sys.stderr)
         return 2
     s = summarize(rows)
 
@@ -161,7 +176,7 @@ def main(argv: list[str]) -> int:
         print(json.dumps(s, indent=2))
         return 0
 
-    print(f"{args.log}")
+    print("  ".join(args.log))
     print(f"  sessions: {s['total']}   ok: {s['ok']}   failed: {s['fail']}   rate: {s['rate']:.1f}%")
     if s["modes"]:
         print("\n  failure modes:")
