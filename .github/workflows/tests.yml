@@ -60,6 +60,11 @@ jobs:
             if [ ! -x "$f" ]; then echo "::error file=$f::not executable"; exit 1; fi
           done
 
+      # SKIPs on Linux (no ~/.hammerspoon/init.lua); see issue #4 for running it
+      # on a macOS runner. Invoked anyway so the script is smoke-tested.
+      - name: macOS live-config drift check (SKIP expected here)
+        run: Mac/check_live_sync.sh
+
       - name: Run tests
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
