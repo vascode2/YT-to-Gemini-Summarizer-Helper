@@ -120,7 +120,18 @@ else
   bad "copyurl.sh orchestration tests failed (see output above)"
 fi
 
-# ---- 6. full-system end-to-end (real copyurl.sh + ydotool + clipboard) ------
+# ---- 6. log analyzer -------------------------------------------------------
+# analyze_log.py turns the log into a rate + failure-mode histogram, which is how
+# "it broke again" becomes a number. Its classification is the only thing that
+# makes the histogram meaningful, so pin every mode both platforms emit.
+note "log analyzer (failure-mode classification)"
+if python3 tests/test_analyze_log.py 2>&1 | sed 's/^/    /'; then
+  ok "analyze_log.py classification (Linux diagnosis + Windows beacon)"
+else
+  bad "analyze_log.py tests failed (see output above)"
+fi
+
+# ---- 7. full-system end-to-end (real copyurl.sh + ydotool + clipboard) ------
 # The deepest test: runs the GENUINE Linux/copyurl.sh orchestrator (real ydotool
 # "]" trigger, real wl-clipboard polling, real window activation) against a real
 # headful Brave + the real extension, and asserts the hovered URL reaches the OS

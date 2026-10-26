@@ -238,6 +238,9 @@ The shell knobs below are environment variables read at the top of
 
 - Log file: `~/.local/state/copyurl/copyurl_log.txt` (rotates at ~1 MB).
   `tail -f ~/.local/state/copyurl/copyurl_log.txt` while testing.
+- `scripts/analyze_log.py` — success rate + failure-mode histogram from the log.
+  Use it instead of reading `timed out` lines by hand:
+  `scripts/analyze_log.py`, `--since 2026-10-01`, `--json`.
 - `Linux/copyurl.sh --check` — verify all dependencies are present.
 - `Linux/copyurl.sh --focus-test` — just raise the Gemini window (focus sanity
   check). The paste itself is driven by the extension, so there is no

@@ -56,7 +56,7 @@ No background script, no native messaging, no host permissions beyond the YouTub
 ## Plan (6 phases — Phase 2 is tracked as issue #3; the rest is historical)
 - **Phase 0** *(this commit)*: handoff scaffolding — `CLAUDE.md`, `docs/troubleshooting.md`.
 - **Phase 1**: opt-in instrumentation — content.js ring-buffer + `document.title` beacon `[CU:ok|null|err|busy]`; copy.ahk pre/post-title logging + per-stage timing; log rotation.
-- **Phase 2**: stress harness — `scripts/stress_copy.ahk` + `scripts/analyze_stress.py`. **Never implemented** (issue #3); the hermetic orchestrator tests added 2026-10-26 cover the logic but not repeated hover-to-clipboard runs.
+- **Phase 2**: stress harness — `scripts/stress_copy.ahk` + an analyzer. **Analyzer half done 2026-10-26**: `scripts/analyze_log.py` (works on any platform's log); the Windows AHK harness is still unimplemented (issue #3); the hermetic orchestrator tests added 2026-10-26 cover the logic but not repeated hover-to-clipboard runs.
 - **Phase 3**: targeted fixes A–E (async-clipboard race, stale hover, Escape, MV3 readiness, Alt collision) — each independently revertable, each gated by N=200 stress run.
 - **Phase 4**: validation (≥99% success, zero "no-beacon" outcomes).
 - **Phase 5**: default flags OFF, instrumentation stays.
@@ -93,6 +93,7 @@ No background script, no native messaging, no host permissions beyond the YouTub
 |2026-10-26|**Testability overhaul: hermetic Linux orchestrator tests + CI + a macOS drift checker; backlog moved to GitHub Issues.** Added `tests/linux/run_copyurl_unit.sh` (runs the genuine `Linux/copyurl.sh` with PATH-shimmed `ydotool`/`xclip`/`wl-copy`/`wl-paste`/`gdbus`/`notify-send`, a file-backed clipboard, and a restricted coreutils PATH so "xclip is absent" is simulable) covering success, retry, total failure + clipboard restore, the stale-clipboard false positive, same-URL re-copy, `--aside`, and backend selection. Wired into `scripts/run_tests.sh` as step 5. Added `.github/workflows/tests.yml` (ubuntu, setup-node, setup-chrome, exec-bit check) — the first CI this repo has had. Added `Mac/check_live_sync.sh`: content-based (not version-based) comparison of the tracked `Mac/hammerspoon/init.lua` CopyURL section against the live `~/.hammerspoon/init.lua`, auto-deriving required symbols and asserting nine named fix markers, one per regression that actually happened. Backlog migrated from this file to GitHub Issues #2–#5. Also fixed a stale `tests/e2e` assertion (`PASTE_PREFIX = "한국말로 요약해줘 - "` vs production `url + " 한국말로 요약해줘"`) which had made the e2e suite red at HEAD; both e2e files now derive the suffix from `content.js` via `readPasteSuffix()`.|Lifetime Linux log showed 153 `done; sent` vs 150 `URL copy failed` — but clustered (06-13: 54, 09-18: 14, 10-16: 38, 10-22: 20) with clean days between, i.e. bimodal environment failures rather than random flakiness, so they are diagnosable but were only ever diagnosed by hand. Every previous fix was verified once, manually; there was no CI and `npm test` needed a live desktop for its deepest steps. The unit harness closes that: it covers the orchestration logic (sentinel reset, retry, failure restore, trigger char, backend choice) with zero desktop dependencies, so regressions surface on push instead of on the next field report. Mutation-tested to confirm it fails when it should: removing the sentinel reset produces 4 failures including "stale clipboard must not count as success", and forcing the `wl` backend produces the xclip-preference failure. The macOS checker replaces a prose instruction that two separate sessions followed but the file still regressed twice; it is verified against a simulated pre-2026-07-17 live file (7 drift failures) and against an in-sync file with unrelated automation appended (passes), and it correctly ignores `CONFIG_VERSION` because the regressed copy reported a *higher* version. |
 |2026-10-26|**Linux: `xclip` and `wl-clipboard` are now alternative dependencies (`copyurl.sh` v8).** `check_deps` requires `ydotool` + `gdbus` plus **either** `xclip` **or** `wl-copy`+`wl-paste`; "neither" fails with install guidance naming both options. Choosing the `wl` backend on a Wayland session now prints a flicker warning and logs `WARN: clipboard backend=wl (…)`, and distinguishes the two causes (`xclip not installed` vs `xclip is installed but DISPLAY is unset`).|`wl-clipboard` was required even though v7 made it a fallback, so a machine with `xclip` + Xwayland but no `wl-clipboard` was refused for no reason. Worse, the reverse — `xclip` missing, so the flicker-prone backend gets picked — was completely silent: the user sees the exact flicker v7 fixed and has no clue why. Six new hermetic scenarios cover it (each tool alone, neither, warn-on-wl, no-warn-on-xclip, DISPLAY-unset cause); mutation-tested by re-adding `wl-copy`/`wl-paste` to the required list (6 failures) and by deleting the warn line (1 failure). |
 |2026-10-26|**Linux: failures now self-diagnose (`copyurl.sh` v9).** `diagnose_copy_failure` runs before the "URL copy failed" message, reads the `copyurlTrace` that `content.js` already writes to `chrome.storage.local` on disk, filters to triggers at/after the press, and logs which leg failed: no trace at all (key never reached the page → extension disabled/wrong profile), storage touched but no trigger (stale content script → reload the tab), `hovered:null` plus the element actually under the cursor, hovered-but-unfocused, or hovered+focused (so the clipboard write itself failed). The desktop notification is rewritten from the same finding instead of always saying "hover a thumbnail". Profile roots default to Brave/Chrome/Aside-Linux, override with `COPYURL_PROFILE_ROOTS`.|Log analysis of 228 real episodes: 75 failures, and in **74 of them activation succeeded and the trigger was typed** — the clipboard just never changed. `timed out` was therefore the only signal, and the notification blamed the user's hover even when the extension had never responded at all. `copyurlTrace` already recorded `hovered`/`focused`/`at`/`key`, so no new instrumentation was needed — only something to read it (LevelDB values are plain JSON, so `grep -ao` + `sed` suffices, no python/leveldb dependency). Six hermetic scenarios cover every branch; mutation-tested by forcing `hovered=null` (3 failures) and by dropping the call (10 failures). Verified against the real on-disk trace as well as the synthetic fixtures. |
+|2026-10-26|**Added `scripts/analyze_log.py` + `tests/test_analyze_log.py`** — turns `copyurl_log.txt` into a success rate and a failure-mode histogram, handling both log formats (Linux `Alt+A fired`/`diagnosis:` lines, Windows `Alt+A pressed`/`beacon=` lines). One "session" = one hotkey press; each is classified on its own. Wired as step 6 of `scripts/run_tests.sh`.|The log only ever got read by hand, so "it broke again" could not be quantified: 228 real presses over 4 months had never been turned into a rate (67.1% overall, with whole days at 0% and whole days clean). Classification is now the only thing making the histogram meaningful, and it had a real bug on first write — `"no-beacon"` was used as the dict key for *both* Linux's `no extension trace written` and Windows' `beacon=none`, so the later entry silently overwrote the earlier and every Linux silent-extension failure was reported as `unclassified`. Renamed to `extension-silent` / `beacon-none`; the tests pin both plus all five Linux diagnosis labels and four Windows beacon states, and were mutation-tested by reintroducing the duplicate key and by neutering `FAILURE_RE`. |
 
 
 ## Diagnostic flags
@@ -151,23 +152,25 @@ The e2e tests read the prompt wording from `content.js` (`readPasteSuffix()`) in
 <!-- This block is regenerated by .githooks/pre-commit on every commit.
      Do not edit by hand — your changes will be overwritten. -->
 
-**Last updated:** `2026-10-26T16:49:56Z`
+**Last updated:** `2026-10-26T16:54:31Z`
 
 **Recent commits (last 5 on HEAD):**
 
-- `a0e39a7` fix(linux): xclip alone is enough; warn loudly when the wl backend is used _(15 minutes ago)_
-- `86ec91f` ci: invoke the macOS drift check on every run (SKIPs on Linux) _(71 minutes ago)_
-- `3e5d17c` fix(ci): pin the Chrome for Testing install path _(73 minutes ago)_
-- `71f4ffe` fix(tests): use a browser that still honors --load-extension _(75 minutes ago)_
-- `9d5d7c3` fix(tests): make the suite CI-safe (deterministic clipboard backend, Chrome 137 extension loading) _(80 minutes ago)_
+- `055ea30` feat(linux): diagnose why a copy failed instead of only "timed out" _(5 minutes ago)_
+- `a0e39a7` fix(linux): xclip alone is enough; warn loudly when the wl backend is used _(20 minutes ago)_
+- `86ec91f` ci: invoke the macOS drift check on every run (SKIPs on Linux) _(76 minutes ago)_
+- `3e5d17c` fix(ci): pin the Chrome for Testing install path _(78 minutes ago)_
+- `71f4ffe` fix(tests): use a browser that still honors --load-extension _(80 minutes ago)_
 
 **Files in the pending commit:**
 
 - `CLAUDE.md`
-- `Linux/copyurl.sh`
 - `Linux/README.md`
 - `manifest.json`
 - `package.json`
 - `package-lock.json`
-- `tests/linux/run_copyurl_unit.sh`
+- `scripts/analyze_log.py`
+- `scripts/__pycache__/analyze_log.cpython-312.pyc`
+- `scripts/run_tests.sh`
+- `tests/test_analyze_log.py`
 <!-- AUTO:RECENT-ACTIVITY:END -->
