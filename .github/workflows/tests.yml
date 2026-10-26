@@ -39,13 +39,14 @@ jobs:
       # removed --load-extension (crbug 401529219) — it would silently never
       # load. Chrome for Testing still honors it and is the build meant for
       # automation, so install that instead of google-chrome-stable.
+      # --path matters: without it the installer drops the browser into the
+      # current directory, not the puppeteer cache the resolver looks in.
       - name: Install Chrome for Testing
-        run: npx --yes @puppeteer/browsers install chrome@stable
-
-      - name: Resolve Chrome for Testing path
         id: chrome
         run: |
-          bin=$(ls -d "$HOME"/.cache/puppeteer/chrome/*/chrome-linux64/chrome 2>/dev/null | tail -1)
+          npx --yes @puppeteer/browsers install chrome@stable --path "$RUNNER_TEMP/cft" > "$RUNNER_TEMP/cft.log"
+          cat "$RUNNER_TEMP/cft.log"
+          bin=$(ls -d "$RUNNER_TEMP"/cft/chrome/*/chrome-linux64/chrome | tail -1)
           test -x "$bin" || { echo "::error::Chrome for Testing not found"; exit 1; }
           "$bin" --version
           echo "chrome-path=$bin" >> "$GITHUB_OUTPUT"
