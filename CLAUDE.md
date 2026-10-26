@@ -94,6 +94,7 @@ No background script, no native messaging, no host permissions beyond the YouTub
 |2026-10-26|**Linux: `xclip` and `wl-clipboard` are now alternative dependencies (`copyurl.sh` v8).** `check_deps` requires `ydotool` + `gdbus` plus **either** `xclip` **or** `wl-copy`+`wl-paste`; "neither" fails with install guidance naming both options. Choosing the `wl` backend on a Wayland session now prints a flicker warning and logs `WARN: clipboard backend=wl (…)`, and distinguishes the two causes (`xclip not installed` vs `xclip is installed but DISPLAY is unset`).|`wl-clipboard` was required even though v7 made it a fallback, so a machine with `xclip` + Xwayland but no `wl-clipboard` was refused for no reason. Worse, the reverse — `xclip` missing, so the flicker-prone backend gets picked — was completely silent: the user sees the exact flicker v7 fixed and has no clue why. Six new hermetic scenarios cover it (each tool alone, neither, warn-on-wl, no-warn-on-xclip, DISPLAY-unset cause); mutation-tested by re-adding `wl-copy`/`wl-paste` to the required list (6 failures) and by deleting the warn line (1 failure). |
 |2026-10-26|**Linux: failures now self-diagnose (`copyurl.sh` v9).** `diagnose_copy_failure` runs before the "URL copy failed" message, reads the `copyurlTrace` that `content.js` already writes to `chrome.storage.local` on disk, filters to triggers at/after the press, and logs which leg failed: no trace at all (key never reached the page → extension disabled/wrong profile), storage touched but no trigger (stale content script → reload the tab), `hovered:null` plus the element actually under the cursor, hovered-but-unfocused, or hovered+focused (so the clipboard write itself failed). The desktop notification is rewritten from the same finding instead of always saying "hover a thumbnail". Profile roots default to Brave/Chrome/Aside-Linux, override with `COPYURL_PROFILE_ROOTS`.|Log analysis of 228 real episodes: 75 failures, and in **74 of them activation succeeded and the trigger was typed** — the clipboard just never changed. `timed out` was therefore the only signal, and the notification blamed the user's hover even when the extension had never responded at all. `copyurlTrace` already recorded `hovered`/`focused`/`at`/`key`, so no new instrumentation was needed — only something to read it (LevelDB values are plain JSON, so `grep -ao` + `sed` suffices, no python/leveldb dependency). Six hermetic scenarios cover every branch; mutation-tested by forcing `hovered=null` (3 failures) and by dropping the call (10 failures). Verified against the real on-disk trace as well as the synthetic fixtures. |
 |2026-10-26|**Added `scripts/analyze_log.py` + `tests/test_analyze_log.py`** — turns `copyurl_log.txt` into a success rate and a failure-mode histogram, handling both log formats (Linux `Alt+A fired`/`diagnosis:` lines, Windows `Alt+A pressed`/`beacon=` lines). One "session" = one hotkey press; each is classified on its own. Wired as step 6 of `scripts/run_tests.sh`.|The log only ever got read by hand, so "it broke again" could not be quantified: 228 real presses over 4 months had never been turned into a rate (67.1% overall, with whole days at 0% and whole days clean). Classification is now the only thing making the histogram meaningful, and it had a real bug on first write — `"no-beacon"` was used as the dict key for *both* Linux's `no extension trace written` and Windows' `beacon=none`, so the later entry silently overwrote the earlier and every Linux silent-extension failure was reported as `unclassified`. Renamed to `extension-silent` / `beacon-none`; the tests pin both plus all five Linux diagnosis labels and four Windows beacon states, and were mutation-tested by reintroducing the duplicate key and by neutering `FAILURE_RE`. |
+|2026-10-26|**Fixed three real defects found while validating the analyzer against the scripts' actual output.** (1) `PRESS_RE` required `Alt+[AZ]` and `pressed` adjacent, so `copy.ahk`'s `--- Alt+Z (Aside) pressed ---` was never counted as a press — every Alt+Z session vanished from the denominator. (2) `SUCCESS_RE` only matched `Sent to Gemini/Aside`, but the Netflix path logs `Sent Netflix sentence to Aside side panel.`, so those successes were reported as `no-outcome`. (3) `diagnose_copy_failure` compared against a strict `find -newermt` second, while ISO timestamps are truncated to the second, so a trace caused by the press itself was intermittently discarded and the failure misattributed — the hermetic suite was ~1-in-4 flaky because of it. Fixed with a 2s grace applied *before* both comparisons, plus a `trace_write_ago` fixture that pins it. Also stopped `analyze_log.py` from tracebacking when its output is piped into `head` (BrokenPipeError), and dropped a committed `scripts/__pycache__` with a `.gitignore` rule. Each fix mutation-tested; suite 6/6 clean.|The analyzer was written against fixtures I imagined rather than the lines the scripts actually emit, and only running it on `copy.ahk`'s real `DebugLog` shapes exposed (1) and (2) — both silently corrupt the *rate*, which is the one number the tool exists to produce. (3) was found by running the hermetic suite repeatedly instead of once: a single green run had hidden a real timestamp race that would also have misdiagnosed real failures in the field. Lesson: validate a log parser against the writer's verbatim output, and treat intermittent test failures as product bugs, not test noise. |
 
 
 ## Diagnostic flags
@@ -152,25 +153,24 @@ The e2e tests read the prompt wording from `content.js` (`readPasteSuffix()`) in
 <!-- This block is regenerated by .githooks/pre-commit on every commit.
      Do not edit by hand — your changes will be overwritten. -->
 
-**Last updated:** `2026-10-26T16:54:31Z`
+**Last updated:** `2026-10-26T17:06:07Z`
 
 **Recent commits (last 5 on HEAD):**
 
-- `055ea30` feat(linux): diagnose why a copy failed instead of only "timed out" _(5 minutes ago)_
-- `a0e39a7` fix(linux): xclip alone is enough; warn loudly when the wl backend is used _(20 minutes ago)_
-- `86ec91f` ci: invoke the macOS drift check on every run (SKIPs on Linux) _(76 minutes ago)_
-- `3e5d17c` fix(ci): pin the Chrome for Testing install path _(78 minutes ago)_
-- `71f4ffe` fix(tests): use a browser that still honors --load-extension _(80 minutes ago)_
+- `9704d8d` feat(tools): analyze the log into a success rate + failure-mode histogram _(12 minutes ago)_
+- `055ea30` feat(linux): diagnose why a copy failed instead of only "timed out" _(16 minutes ago)_
+- `a0e39a7` fix(linux): xclip alone is enough; warn loudly when the wl backend is used _(31 minutes ago)_
+- `86ec91f` ci: invoke the macOS drift check on every run (SKIPs on Linux) _(88 minutes ago)_
+- `3e5d17c` fix(ci): pin the Chrome for Testing install path _(89 minutes ago)_
 
 **Files in the pending commit:**
 
 - `CLAUDE.md`
+- `.gitignore`
+- `Linux/copyurl.sh`
 - `Linux/README.md`
-- `manifest.json`
-- `package.json`
-- `package-lock.json`
 - `scripts/analyze_log.py`
 - `scripts/__pycache__/analyze_log.cpython-312.pyc`
-- `scripts/run_tests.sh`
+- `tests/linux/run_copyurl_unit.sh`
 - `tests/test_analyze_log.py`
 <!-- AUTO:RECENT-ACTIVITY:END -->

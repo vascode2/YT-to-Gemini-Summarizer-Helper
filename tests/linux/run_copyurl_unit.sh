@@ -344,9 +344,17 @@ if grep -q 'apt install xclip' "$SB/stderr"; then bad "told the user to install 
 # is replaced with "now", because the script only counts triggers recorded at or
 # after the press (an older trigger would name the wrong cause).
 trace_write() {
-  local dir="$SB/profiles/Default/Local Extension Settings/gnkpcpmnkhflhbnoblakgdohadhnlljo"
+  trace_write_ago 0 "$1"
+}
+
+# Write a trace stamped N seconds in the past. Used to pin the sub-second race:
+# ISO timestamps are truncated to the second and `find -newermt` is strict, so a
+# trace caused by the press itself can be stamped at or just before the press
+# second. That used to intermittently discard it and report the wrong cause.
+trace_write_ago() {
+  local ago="$1" dir="$SB/profiles/Default/Local Extension Settings/gnkpcpmnkhflhbnoblakgdohadhnlljo"
   mkdir -p "$dir"
-  printf '%s' "${1//@TS@/$(date -u +%Y-%m-%dT%H:%M:%S.000Z)}" >"$dir/000003.log"
+  printf '%s' "${2//@TS@/$(date -u -d "@$(( $(date +%s) - ago ))" +%Y-%m-%dT%H:%M:%S.000Z)}" >"$dir/000003.log"
 }
 
 note "diagnosis: key never reached the page (no trace written)"
@@ -368,6 +376,14 @@ expect_log 'diagnosis: extension saw key=BracketRight focused=true hovered=null'
 expect_log "diagnosis: NO VIDEO UNDER THE CURSOR at press time"
 expect_log "the cursor was over 'DIV#content'"
 expect_log "No video under the cursor (it was over 'DIV#content')"
+
+note "diagnosis: a trace stamped in the same second as the press still counts"
+new_sandbox
+trace_write_ago 1 '{"event":"trigger","focused":true,"hovered":null,"key":"BracketRight","at":"DIV#content","ts":"@TS@"}'
+run_flow_scenario "before" "-
+-"
+expect_rc 1
+expect_log "diagnosis: NO VIDEO UNDER THE CURSOR at press time"
 
 note "diagnosis: video hovered but page unfocused"
 new_sandbox

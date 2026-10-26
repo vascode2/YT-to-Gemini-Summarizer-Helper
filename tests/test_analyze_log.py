@@ -41,10 +41,12 @@ LINUX_FAIL = """\
 2026-10-26 10:00:01 ERROR: URL copy failed. {hint}
 """
 
+# Verbatim line shapes from copy.ahk's DebugLog() calls. The "--- " wrapper and
+# the "t=<tick> | " field are real; so is the parenthetical in the Alt+Z form.
 AHK_FAIL = """\
-2026-10-26 10:06:00 Alt+A pressed
+2026-10-26 10:06:00 t=999 | --- Alt+A pressed ---
 2026-10-26 10:06:01 t=999 | Copy attempt 1 on Brave.exe timed out (beacon={beacon}).
-2026-10-26 10:06:02 t=999 | Copy failed
+2026-10-26 10:06:02 t=999 | Candidate Brave.exe gave up after 3 attempts — falling through to next candidate.
 """
 
 # diagnosis line -> expected label. Each must classify distinctly.
@@ -115,6 +117,35 @@ def test_success_and_rate():
     check("rate is 50%", round(s["rate"], 1), 50.0)
 
 
+def test_ahk_real_line_shapes():
+    print("\n=== Windows: real DebugLog shapes are all detected ===")
+    # Regression guards for two real bugs: (1) "--- Alt+Z (Aside) pressed ---"
+    # was not counted as a press because the parenthetical broke adjacency, and
+    # (2) "Sent Netflix sentence to Aside side panel." was not counted as
+    # success because it does not read "Sent to". Either bug silently drops
+    # sessions from the denominator and corrupts the rate.
+    body = (
+        "2026-10-26 10:00:00 t=1 | --- Alt+A pressed ---\n"
+        "2026-10-26 10:00:01 t=2 | Copy attempt 1 on Brave.exe succeeded.\n"
+        "2026-10-26 10:00:02 t=3 | Sent to Gemini.\n"
+        "2026-10-26 10:01:00 t=4 | --- Alt+Z (Aside) pressed ---\n"
+        "2026-10-26 10:01:05 t=5 | Netflix sentence len=46\n"
+        "2026-10-26 10:01:08 t=6 | Sent Netflix sentence to Aside side panel.\n"
+        "2026-10-26 10:02:00 t=7 | --- Alt+A pressed ---\n"
+        "2026-10-26 10:02:01 t=8 | Copy attempt 1 on Brave.exe timed out (beacon=none).\n"
+        "2026-10-26 10:02:02 t=9 | Candidate Brave.exe fast-failed (beacon=none) — falling through.\n"
+    )
+    path = write_tmp(body)
+    try:
+        s = summarize(parse(path))
+    finally:
+        os.unlink(path)
+    check("all 3 presses counted", s["total"], 3)
+    check("2 successes", s["ok"], 2)
+    check("1 failure", s["fail"], 1)
+    check("the failure is beacon-none", list(s["modes"]), ["beacon-none"])
+
+
 def test_since_filter():
     print("\n=== --since drops older sessions ===")
     body = (
@@ -150,6 +181,7 @@ def test_press_boundaries():
 def main():
     test_linux_modes()
     test_ahk_modes()
+    test_ahk_real_line_shapes()
     test_success_and_rate()
     test_since_filter()
     test_press_boundaries()

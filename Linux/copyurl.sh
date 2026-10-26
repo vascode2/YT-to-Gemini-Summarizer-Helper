@@ -321,6 +321,13 @@ DIAGNOSIS_HINT=""
 diagnose_copy_failure() {
   local since="$1" file hits line
   DIAGNOSIS_HINT="Hover a YouTube thumbnail and press again."
+  # 2s of grace, applied before either comparison: the timestamp is written by
+  # the browser process and compared here, and ISO timestamps are truncated to
+  # the second, so a trace caused by this very press can be stamped at or just
+  # before the press second. Without the slack, both `find -newermt` and the
+  # `ts >= since` test intermittently discard the trace that proves what
+  # happened. Genuinely stale triggers are minutes old, so 2s costs nothing.
+  since=$(( since - 2 ))
   local -a files=()
   while IFS= read -r file; do
     [[ -n "$file" ]] && files+=("$file")

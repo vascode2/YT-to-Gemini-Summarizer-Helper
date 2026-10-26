@@ -34,16 +34,22 @@ from datetime import datetime
 
 DEFAULT_LOG = os.path.expanduser("~/.local/state/copyurl/copyurl_log.txt")
 
-# A press starts a session. Both platforms log a distinct "fired"/"pressed"
-# line at handler entry; nothing else does.
-PRESS_RE = re.compile(
-    r"(Alt\+[AZ] fired"                 # Linux: "Alt+A fired (target=gemini, ...)"
-    r"|Alt\+[AZ] pressed"               # Windows: "Alt+A pressed"
-    r"|RunFlow|RunNetflixExplain)",     # Windows entry points
-    re.I,
-)
+# A press starts a session. Both platforms log one distinct line at handler
+# entry, and nothing else does:
+#   Linux    "Alt+A fired (target=gemini, version=v9 ...)"
+#   Windows  "--- Alt+A pressed ---" / "--- Alt+Z (Aside) pressed ---"
+# The Aside variant has a parenthetical between the chord and "pressed", so it
+# must be optional -- requiring them adjacent silently dropped every Alt+Z press.
+PRESS_RE = re.compile(r"Alt\+[AZ]\s*(?:\([^)]*\)\s*)?(?:fired|pressed)", re.I)
 TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})")
-SUCCESS_RE = re.compile(r"done; sent|Sent to (?:Gemini|Aside)|succeeded", re.I)
+# Every "the flow finished" line across both platforms, verbatim from the
+# scripts: Linux "done; sent ...", Windows "Sent to Gemini.", "Sent to Aside
+# side panel.", "Sent Netflix sentence to Aside side panel.", "Copy attempt N
+# on X succeeded." The Netflix variant does not read "Sent to", so a
+# "Sent to ..." pattern alone silently reported it as no-outcome.
+SUCCESS_RE = re.compile(
+    r"done; sent|\bSent\b.*\b(?:Gemini|Aside)\b|succeeded", re.I
+)
 FAILURE_RE = re.compile(r"ERROR: URL copy failed|Copy failed|gave up after|fast-failed", re.I)
 
 # Failure-mode classification, most specific first. Each pattern maps to a short
@@ -170,4 +176,9 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except BrokenPipeError:
+        # `analyze_log.py | head` closes the pipe early; that is not an error.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        sys.exit(0)

@@ -262,6 +262,10 @@ identical from the clipboard. So on every failure `copyurl.sh` reads back the
 | `a video was hovered but the page did not have focus` | Hover was right, but the key went to another window | Click the page, press again. |
 | `the extension DID have a hovered video and the page was focused` | Everything arrived; the clipboard write itself failed | Check the clipboard backend (`--check`), then retry. |
 
+Triggers are matched with a 2 s grace window, because the browser stamps ISO
+timestamps truncated to the second and a trace caused by this very press can
+otherwise look older than the press.
+
 The desktop notification says the same thing, so you do not need the log for the
 common cases. Trace locations default to Brave, Chrome, and the Aside Linux
 profile; override with `COPYURL_PROFILE_ROOTS` (space-separated profile roots).

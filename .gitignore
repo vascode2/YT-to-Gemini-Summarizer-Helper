@@ -22,3 +22,7 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+# Python bytecode (scripts/analyze_log.py is imported by its test)
+__pycache__/
+*.pyc
