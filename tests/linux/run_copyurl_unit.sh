@@ -17,6 +17,8 @@
 #   - clipboard backend selection: xclip when DISPLAY+xclip, wl-* otherwise
 #   - dependency checking: xclip alone is enough, wl-clipboard alone is enough,
 #     neither is an error, and choosing the wl backend warns about flicker
+#   - failure diagnosis: distinguishes "key never arrived", "no video hovered"
+#     and "hovered but unfocused" using the extension's on-disk trace
 #
 # Usage: tests/linux/run_copyurl_unit.sh        (exit 0 = all pass)
 
@@ -114,7 +116,7 @@ SH
   # would be found and the wl-clipboard fallback would never be exercised.
   mkdir -p "$SB/core"
   for u in bash date stat mkdir mv sed cat grep id sleep timeout bc dirname \
-           basename uname mktemp tail head awk tr sort; do
+           basename uname mktemp tail head awk tr sort find; do
     src="$(command -v "$u" 2>/dev/null)" && ln -s "$src" "$SB/core/$u"
   done
   # Deterministic backend selection: copyurl.sh prefers xclip only when DISPLAY
@@ -132,6 +134,8 @@ SH
   export COPYURL_CLIP_TIMEOUT=0.2
   export COPYURL_CLIP_POLL=0.01
   export COPYURL_NOTIFY=0
+  # No real extension storage: diagnosis must only see what a scenario writes.
+  export COPYURL_PROFILE_ROOTS="$SB/profiles"
   # Activate Window By Title needs a session bus; the shim ignores the call.
   export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$SB/no-bus}"
   rm -f "$COPYURL_LOG_FILE"
@@ -334,6 +338,74 @@ if grep -q 'DISPLAY is unset' "$SB/stderr"; then ok "explains DISPLAY is unset";
 if grep -q 'apt install xclip' "$SB/stderr"; then bad "told the user to install xclip, but it is installed"; else ok "does not suggest installing an already-installed xclip"; fi
 
 # ---------------------------------------------------------------------------
+# Failure diagnosis. A clipboard poll can only say "timed out"; these assert the
+# log says WHY, by reading the same copyurlTrace content.js writes to disk.
+# trace_write <json> ; creates a fresh trace file. Any literal @TS@ in the JSON
+# is replaced with "now", because the script only counts triggers recorded at or
+# after the press (an older trigger would name the wrong cause).
+trace_write() {
+  local dir="$SB/profiles/Default/Local Extension Settings/gnkpcpmnkhflhbnoblakgdohadhnlljo"
+  mkdir -p "$dir"
+  printf '%s' "${1//@TS@/$(date -u +%Y-%m-%dT%H:%M:%S.000Z)}" >"$dir/000003.log"
+}
+
+note "diagnosis: key never reached the page (no trace written)"
+new_sandbox
+run_flow_scenario "before" "-
+-"
+expect_rc 1
+expect_log "diagnosis: no extension trace written since the press"
+expect_log "the trigger never reached content.js"
+expect_log "The extension did not respond. Is it enabled in this browser profile"
+
+note "diagnosis: no video under the cursor"
+new_sandbox
+trace_write '{"event":"trigger","focused":true,"hovered":null,"key":"BracketRight","at":"DIV#content","ts":"@TS@"}'
+run_flow_scenario "before" "-
+-"
+expect_rc 1
+expect_log 'diagnosis: extension saw key=BracketRight focused=true hovered=null'
+expect_log "diagnosis: NO VIDEO UNDER THE CURSOR at press time"
+expect_log "the cursor was over 'DIV#content'"
+expect_log "No video under the cursor (it was over 'DIV#content')"
+
+note "diagnosis: video hovered but page unfocused"
+new_sandbox
+trace_write '{"event":"trigger","focused":false,"hovered":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","key":"BracketRight","ts":"@TS@"}'
+run_flow_scenario "before" "-
+-"
+expect_rc 1
+expect_log "a video was hovered but the page did not have focus"
+expect_log "the page lost focus. Click the page"
+
+note "diagnosis: key arrived, video hovered, page focused -> copy failed later"
+new_sandbox
+trace_write '{"event":"trigger","focused":true,"hovered":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","key":"BracketRight","ts":"@TS@"}'
+run_flow_scenario "before" "-
+-"
+expect_rc 1
+expect_log "the copy failed after the key arrived"
+expect_log "Check that xclip/wl-clipboard works"
+
+note "diagnosis: extension storage touched but no trigger recorded"
+new_sandbox
+trace_write '{"event":"focus","page":"/","ts":"@TS@"}'
+run_flow_scenario "before" "-
+-"
+expect_rc 1
+expect_log "no trigger was recorded for this press"
+expect_log "Reload the YouTube tab"
+
+note "diagnosis: newest trigger wins when several are present"
+new_sandbox
+trace_write '{"event":"trigger","focused":true,"hovered":null,"key":"BracketRight","ts":"@TS@"}
+{"event":"trigger","focused":true,"hovered":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","key":"BracketRight","ts":"@TS@"}'
+run_flow_scenario "before" "-
+-"
+expect_rc 1
+expect_log "the copy failed after the key arrived"
+expect_log "Check that xclip/wl-clipboard works"
+
 note "Summary"
 if (( fail == 0 )); then echo "  ALL GREEN"; else echo "  FAILURES ABOVE"; fi
 exit "$fail"

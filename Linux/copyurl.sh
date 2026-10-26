@@ -41,7 +41,7 @@ set -uo pipefail
 # ----------------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------------
-CONFIG_VERSION="v8 2026-10-26 clipboard-tool-optional"
+CONFIG_VERSION="v9 2026-10-26 failure-diagnosis"
 
 # Substring matched (case-insensitive on the extension side) against window
 # titles to find the Gemini window. The PWA's title contains "Gemini".
@@ -56,6 +56,14 @@ YOUTUBE_TITLE_NEEDLE="${COPYURL_YOUTUBE_NEEDLE:-YouTube}"
 # recently used window of that class is raised. Defaults: the Aside Linux
 # browser window and the Gemini web app installed in Aside Linux. Set to ""
 # to match by title only (e.g. Brave).
+# Where to look for the extension's on-disk `copyurlTrace` when a copy fails.
+# content.js records every trigger press there (key, hovered URL, focused,
+# element under the cursor), which is the only way to tell "the keystroke never
+# reached the page" from "it did, but there was no video under the cursor" --
+# both look identical from the clipboard. Space-separated; override to add
+# profiles (e.g. a portable Aside install).
+COPYURL_PROFILE_ROOTS="${COPYURL_PROFILE_ROOTS-$HOME/.config/BraveSoftware/Brave-Browser $HOME/.config/google-chrome $HOME/Projects/Personal/Aside-Linux/.local/runtime/chrome}"
+
 BROWSER_WMCLASS="${COPYURL_BROWSER_WMCLASS-org.asidelinux.Browser}"
 GEMINI_WMCLASS="${COPYURL_GEMINI_WMCLASS-chrome-gdfaincndogidkdcdkhapmbffkckdkhn-Default}"
 # Gemini PWA installed in another Chrome profile uses a different window class
@@ -296,6 +304,91 @@ activate_gemini() {
 # even when Brave is not the focused window. Non-fatal: if activation fails
 # (extension missing, no matching title), we still type the trigger into
 # whatever is focused, preserving the old behaviour.
+# ----------------------------------------------------------------------------
+# Failure diagnosis
+# ----------------------------------------------------------------------------
+# "timed out" is the only thing a clipboard poll can tell us, but it is the
+# symptom, not the cause: the trigger never reaching the page, a press with no
+# thumbnail under the cursor, and the extension being disabled all look the
+# same. content.js already records which one happened in `copyurlTrace` (its
+# chrome.storage.local, on disk), so read it back and say which.
+#
+# The trace is LevelDB, but the values are plain JSON in the log file, so a
+# regex over the raw bytes is enough and needs no python/leveldb dependency.
+# Sets DIAGNOSIS_HINT to the action the user should take, so the notification
+# can name the real cause instead of always blaming the hover.
+DIAGNOSIS_HINT=""
+diagnose_copy_failure() {
+  local since="$1" file hits line
+  DIAGNOSIS_HINT="Hover a YouTube thumbnail and press again."
+  local -a files=()
+  while IFS= read -r file; do
+    [[ -n "$file" ]] && files+=("$file")
+  done < <(
+    local root
+    for root in $COPYURL_PROFILE_ROOTS; do
+      [[ -d "$root" ]] || continue
+      find "$root" -path '*/Local Extension Settings/*' -name '*.log' \
+        -newermt "@$since" 2>/dev/null
+    done
+  )
+
+  if (( ${#files[@]} == 0 )); then
+    log "diagnosis: no extension trace written since the press"
+    log "diagnosis: the trigger never reached content.js (extension disabled or removed from this profile? wrong browser profile?)"
+    DIAGNOSIS_HINT="The extension did not respond. Is it enabled in this browser profile, and is a YouTube tab open?"
+    return 0
+  fi
+
+  # Only triggers recorded at or after the press count: a file that was touched
+  # by an unrelated event (blur/focus) still contains older triggers, and
+  # reporting one of those would name the wrong cause.
+  local raw ts
+  hits=""
+  while IFS= read -r raw; do
+    ts="$(sed -n 's/.*"ts":"\([^"]*\)".*/\1/p' <<<"$raw")"
+    [[ -n "$ts" ]] || continue
+    (( $(date -d "$ts" +%s 2>/dev/null || echo 0) >= since )) || continue
+    hits+="$raw"$'\n'
+  done < <(grep -hao '"event":"trigger"[^}]*}' "${files[@]}" 2>/dev/null)
+  if [[ -z "$hits" ]]; then
+    # The file changed, but no trigger was recorded for THIS press. Either the
+    # key reached the page and content.js ignored it (a stale content script
+    # that predates the current listener), or the write is still in flight.
+    log "diagnosis: extension storage changed but no trigger was recorded for this press"
+    log "diagnosis: the key may have reached the page without content.js handling it (reload the YouTube tab to re-inject it)"
+    DIAGNOSIS_HINT="Reload the YouTube tab (the extension's content script looks stale)."
+    return 0
+  fi
+
+  line="$(printf '%s' "${hits%$'\n'}" | tail -1)"
+  local hovered focused key at
+  # hovered is either a JSON string ("...") or the bare literal null.
+  hovered="$(sed -n 's/.*"hovered":\(null\|"[^"]*"\).*/\1/p' <<<"$line")"
+  hovered="${hovered#\"}"; hovered="${hovered%\"}"
+  focused="$(sed -n 's/.*"focused":\(true\|false\).*/\1/p' <<<"$line")"
+  key="$(sed -n 's/.*"key":"\([^"]*\)".*/\1/p' <<<"$line")"
+  at="$(sed -n 's/.*"at":"\([^"]*\)".*/\1/p' <<<"$line")"
+
+  log "diagnosis: extension saw key=$key focused=$focused hovered=${hovered:-unknown} under-cursor=${at:-unknown}"
+  if [[ "$hovered" == "null" || -z "$hovered" ]]; then
+    log "diagnosis: NO VIDEO UNDER THE CURSOR at press time (hover a thumbnail and press again)"
+    if [[ -n "$at" ]]; then
+      log "diagnosis: the cursor was over '$at', which is not inside a thumbnail link"
+      DIAGNOSIS_HINT="No video under the cursor (it was over '$at'). Hover a thumbnail and press again."
+    else
+      DIAGNOSIS_HINT="No video under the cursor. Hover a thumbnail and press again."
+    fi
+  elif [[ "$focused" == "false" ]]; then
+    log "diagnosis: a video was hovered but the page did not have focus, so the key went elsewhere"
+    DIAGNOSIS_HINT="A video was hovered but the page lost focus. Click the page, then press again."
+  else
+    log "diagnosis: the extension DID have a hovered video and the page was focused, so the copy failed after the key arrived (clipboard write blocked?)"
+    DIAGNOSIS_HINT="The copy failed even though the video was found. Check that xclip/wl-clipboard works, then try again."
+  fi
+  return 0
+}
+
 activate_youtube() {
   # Prefer the browser's window class: a title match can hit the Gemini app,
   # whose chat title often mentions YouTube after the first summary.
@@ -379,13 +472,15 @@ run_flow() {
     key="Alt+Z"
   fi
   log "$key fired (target=$target, version=$CONFIG_VERSION)"
-  local original_clip
+  local original_clip press_epoch
+  press_epoch=$(date +%s)
   original_clip="$(clip_get)"
 
   if ! copy_url_from_browser; then
     # Restore whatever the user had before we wrote the sentinel.
     [[ -n "$original_clip" ]] && clip_set "$original_clip"
-    die "URL copy failed. Hover a YouTube thumbnail in the browser (Brave or Aside), then press $key again."
+    diagnose_copy_failure "$press_epoch"
+    die "URL copy failed. $DIAGNOSIS_HINT ($key)"
   fi
 
   # Aside: content.js has handed the prompt to the Aside extension, which opens

@@ -243,13 +243,33 @@ The shell knobs below are environment variables read at the top of
   check). The paste itself is driven by the extension, so there is no
   standalone paste test — use the full **Alt+A** flow on a real thumbnail.
 
+## Failure diagnosis
+
+A clipboard poll can only say "timed out", but the trigger not arriving, a press
+with no thumbnail under the cursor, and the extension being disabled all look
+identical from the clipboard. So on every failure `copyurl.sh` reads back the
+`copyurlTrace` that `content.js` keeps in `chrome.storage.local` (on disk, under
+`…/Local Extension Settings/<extension-id>/`) and logs which case it was:
+
+| Logged | Meaning | What to do |
+|---|---|---|
+| `no extension trace written since the press` | The keystroke never reached `content.js` | Extension not enabled/installed in **this** profile, or no YouTube tab open. |
+| `extension storage changed but no trigger was recorded for this press` | The page reacted but the trigger was not handled | Stale content script — reload the YouTube tab. |
+| `NO VIDEO UNDER THE CURSOR at press time` + `the cursor was over '<TAG>#<id>'` | The key arrived; nothing hoverable was under the cursor | Hover a thumbnail. The logged element says what was actually under the cursor. |
+| `a video was hovered but the page did not have focus` | Hover was right, but the key went to another window | Click the page, press again. |
+| `the extension DID have a hovered video and the page was focused` | Everything arrived; the clipboard write itself failed | Check the clipboard backend (`--check`), then retry. |
+
+The desktop notification says the same thing, so you do not need the log for the
+common cases. Trace locations default to Brave, Chrome, and the Aside Linux
+profile; override with `COPYURL_PROFILE_ROOTS` (space-separated profile roots).
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `ydotool could not type the trigger` | `ydotoold` not running, or no `/dev/uinput` access | `systemctl --user status ydotoold`; redo step 2 (udev rule + `input` group) and re-login. |
 | `ydotool type` does nothing | Socket path mismatch | Ensure `YDOTOOL_SOCKET` matches the service's `--socket-path` (default `$XDG_RUNTIME_DIR/ydotool/ydotoold.sock`). |
-| "URL copy failed" | The Brave/YouTube window couldn't be raised (title doesn't contain `YouTube`, or the *Activate Window By Title* extension is off), or `content.js` had a stale `hoveredVideoUrl` | Make sure a YouTube tab is frontmost in Brave and the extension is enabled. Override the match with `COPYURL_YOUTUBE_NEEDLE`. Check DevTools console: `window.__copyurlLog` (set `localStorage.__copyurlDebug="1"`). |
+| "URL copy failed" | Read the `diagnosis:` lines logged right before it — they name the actual leg that failed instead of guessing | See *Failure diagnosis* below. |
 | Gemini not raised | Extension missing/disabled, or title needle wrong | Re-run the `gdbus` call in step 4; confirm `(true,)`. Adjust `COPYURL_GEMINI_NEEDLE`. |
 | URL copied but nothing pasted into Gemini | **Gemini is in a different browser/profile than the extension** (most common: Gemini in Chrome, YouTube+extension in Brave), or `gemini.js` not loaded / composer selector changed | Run Gemini as a **Brave app in the same profile** (step 5) — `chrome.storage` is per browser+profile, so a Chrome Gemini can't see Brave's payload. Then reload the extension (step 6). Open the Gemini window's DevTools console and look for `[CopyURL/Gemini] ready` and any errors. |
 | Pasted into the wrong field / not submitted | Gemini DOM changed | Update the composer/send selectors in [../gemini.js](../gemini.js). |
