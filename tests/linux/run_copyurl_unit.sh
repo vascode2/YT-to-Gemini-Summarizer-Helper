@@ -15,6 +15,8 @@
 #   - same video twice in a row (the sentinel's whole reason to exist)
 #   - --aside: trigger "[" instead of "]", no Gemini focus
 #   - clipboard backend selection: xclip when DISPLAY+xclip, wl-* otherwise
+#   - dependency checking: xclip alone is enough, wl-clipboard alone is enough,
+#     neither is an error, and choosing the wl backend warns about flicker
 #
 # Usage: tests/linux/run_copyurl_unit.sh        (exit 0 = all pass)
 
@@ -270,6 +272,66 @@ unset DISPLAY              # pure Wayland, no Xwayland: xclip is unusable
 run_flow_scenario "user-clipboard-before" "$URL_A"
 expect_rc 0
 if grep -q '^wl-paste' "$SB/shim_calls"; then ok "used wl-paste"; else bad "wl-paste not used without DISPLAY"; fi
+
+# ---------------------------------------------------------------------------
+note "deps: xclip alone is enough (no wl-clipboard)"
+new_sandbox
+rm -f "$SB/bin/wl-copy" "$SB/bin/wl-paste"
+export DISPLAY=:0
+run_flow_scenario "user-clipboard-before" "$URL_A"
+expect_rc 0
+expect_log "done; sent url=$URL_A"
+expect_clip "$URL_A"
+
+# ---------------------------------------------------------------------------
+note "deps: wl-clipboard alone is enough (no xclip)"
+new_sandbox
+rm -f "$SB/bin/xclip"
+export DISPLAY=:0
+run_flow_scenario "user-clipboard-before" "$URL_A"
+expect_rc 0
+expect_log "done; sent url=$URL_A"
+
+# ---------------------------------------------------------------------------
+note "deps: neither clipboard tool -> fail with install guidance"
+new_sandbox
+rm -f "$SB/bin/xclip" "$SB/bin/wl-copy" "$SB/bin/wl-paste"
+run_flow_scenario "user-clipboard-before" "$URL_A"
+expect_rc 1
+if grep -q 'Missing a clipboard tool' "$SB/stderr"; then ok "says a clipboard tool is missing"; else bad "unhelpful error: $(cat "$SB/stderr")"; fi
+if grep -q 'apt install xclip' "$SB/stderr"; then ok "suggests installing xclip"; else bad "no xclip suggestion"; fi
+
+# ---------------------------------------------------------------------------
+note "deps: wl backend warns about flicker (log + stderr)"
+new_sandbox
+rm -f "$SB/bin/xclip"
+export DISPLAY=:0
+export WAYLAND_DISPLAY=wayland-0
+run_flow_scenario "user-clipboard-before" "$URL_A"
+expect_rc 0
+if grep -q 'may flicker' "$SB/stderr"; then ok "stderr warns about flicker"; else bad "no flicker warning on stderr"; fi
+expect_log "WARN: clipboard backend=wl"
+
+# ---------------------------------------------------------------------------
+note "deps: no flicker warning when xclip is used"
+new_sandbox
+export DISPLAY=:0
+export WAYLAND_DISPLAY=wayland-0
+run_flow_scenario "user-clipboard-before" "$URL_A"
+expect_rc 0
+expect_nolog "clipboard backend=wl"
+if grep -q 'may flicker' "$SB/stderr"; then bad "warned about flicker while using xclip"; else ok "no spurious flicker warning"; fi
+
+# ---------------------------------------------------------------------------
+note "deps: xclip installed but DISPLAY unset names that cause"
+new_sandbox
+unset DISPLAY
+export WAYLAND_DISPLAY=wayland-0
+run_flow_scenario "user-clipboard-before" "$URL_A"
+expect_rc 0
+if grep -q 'DISPLAY is unset' "$SB/stderr"; then ok "explains DISPLAY is unset"; else bad "wrong cause reported: $(cat "$SB/stderr")"; fi
+# xclip IS installed here, so telling the user to install it would be wrong advice.
+if grep -q 'apt install xclip' "$SB/stderr"; then bad "told the user to install xclip, but it is installed"; else ok "does not suggest installing an already-installed xclip"; fi
 
 # ---------------------------------------------------------------------------
 note "Summary"

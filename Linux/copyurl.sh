@@ -41,7 +41,7 @@ set -uo pipefail
 # ----------------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------------
-CONFIG_VERSION="v7 2026-10-22 xclip-no-flicker"
+CONFIG_VERSION="v8 2026-10-26 clipboard-tool-optional"
 
 # Substring matched (case-insensitive on the extension side) against window
 # titles to find the Gemini window. The PWA's title contains "Gemini".
@@ -160,13 +160,45 @@ fi
 
 check_deps() {
   local missing=()
-  for cmd in ydotool wl-copy wl-paste gdbus; do
+  for cmd in ydotool gdbus; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
   done
+
+  # Clipboard: xclip OR wl-clipboard, not both. They are alternative backends
+  # (see clip_get/clip_set), so requiring both rejected machines that have
+  # xclip + Xwayland but no wl-clipboard, for no reason.
+  local have_xclip=0 have_wl=0
+  command -v xclip   >/dev/null 2>&1 && have_xclip=1
+  command -v wl-copy  >/dev/null 2>&1 && command -v wl-paste >/dev/null 2>&1 && have_wl=1
+
   if (( ${#missing[@]} > 0 )); then
     echo "Missing required commands: ${missing[*]}" >&2
-    echo "See Linux/README.md for installation (ydotool, wl-clipboard, glib2)." >&2
+    echo "See Linux/README.md for installation (ydotool, glib2)." >&2
     return 1
+  fi
+  if (( ! have_xclip && ! have_wl )); then
+    echo "Missing a clipboard tool: install xclip (preferred) or wl-clipboard." >&2
+    echo "  sudo apt install xclip          # preferred: no window flicker" >&2
+    echo "  sudo apt install wl-clipboard   # fallback: steals focus while polling" >&2
+    return 1
+  fi
+  # The wl-* backend maps a toplevel to grab keyboard focus on every call, so
+  # polling it makes windows visibly flicker. That still "works", which is why
+  # it went unnoticed, so say it out loud instead of degrading silently.
+  if [[ "${CLIP_BACKEND:-}" == wl ]] && \
+     [[ -n "${WAYLAND_DISPLAY:-}" || "${XDG_SESSION_TYPE:-}" == wayland ]]; then
+    local why fix
+    if (( have_xclip )); then
+      why="xclip is installed but DISPLAY is unset"
+      fix="export DISPLAY=:0 in the shortcut (or find out why Xwayland's DISPLAY was lost)"
+    else
+      why="xclip not installed"
+      fix="sudo apt install xclip"
+    fi
+    echo "WARNING: using the wl-clipboard backend ($why)." >&2
+    echo "         wl-paste/wl-copy grab keyboard focus on every poll, so windows" >&2
+    echo "         may flicker during a copy. Fix: $fix" >&2
+    log "WARN: clipboard backend=wl ($why); fix: $fix"
   fi
   return 0
 }

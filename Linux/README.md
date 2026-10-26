@@ -85,15 +85,26 @@ Everything else is done where it is reliable:
 
 ```sh
 sudo apt update
-sudo apt install -y ydotool wl-clipboard xclip bc libnotify-bin
+sudo apt install -y ydotool xclip bc libnotify-bin   # wl-clipboard is an optional fallback
 ```
 
 If your distro's `ydotool` package does not include `ydotoold`, build it from
 source (https://github.com/ReimuNotMoe/ydotool) or use the snap. Confirm:
 
 ```sh
-command -v ydotool ydotoold wl-copy wl-paste gdbus
+command -v ydotool ydotoold gdbus
+Linux/copyurl.sh --check
 ```
+
+**Clipboard:** `xclip` and `wl-clipboard` are alternative backends, so you need
+**one**, not both — `--check` accepts either. `xclip` is strongly preferred:
+it polls through an unmapped X window, so nothing flickers. The `wl-*` backend
+maps a toplevel to take focus on every poll, so windows visibly flicker during a
+copy. `copyurl.sh` logs `WARN: clipboard backend=wl …` and prints the same
+warning when it has to fall back, so this can never regress silently.
+
+Note `xclip` only works when `DISPLAY` is set (Xwayland). If it is installed but
+`DISPLAY` is unset, `--check` says so explicitly instead of quietly flickering.
 
 ### 2. Allow ydotoold to use /dev/uinput without root
 
