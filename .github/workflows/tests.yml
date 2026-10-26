@@ -6,6 +6,7 @@ name: tests
 #   - gemini.js paste/submit against the headless DOM mock
 #   - the real unpacked extension end-to-end via puppeteer-core
 #   - the hermetic Linux orchestrator tests (shimmed ydotool/xclip/gdbus)
+#   - the log analyzer's failure-mode classification (tests/test_analyze_log.py)
 #
 # Deliberately NOT run: the full-system test (tests/e2e/run_full_system.mjs)
 # needs Wayland + ydotoold + a headful browser, and the macOS drift check
