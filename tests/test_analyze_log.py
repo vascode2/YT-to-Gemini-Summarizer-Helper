@@ -162,6 +162,34 @@ def test_since_filter():
         os.unlink(path)
 
 
+def test_send_failure_beats_copy_success():
+    print("\n=== Windows: a failed send must not read as success ===")
+    # "Copy attempt 1 ... succeeded." fires SUCCESS_RE on the copy leg; if the
+    # send then fails the session still counts as a failure -- else a user who
+    # never got a summary inflates the rate. Pins every Windows send-failure
+    # line shape (desktop helper, Aside helper, no-target) as send-failed.
+    shapes = [
+        "Gemini desktop send failed: composition-not-found",
+        "Gemini UIA helper failed: window not found",
+        "Aside UIA helper failed: panel not found",
+        "Gemini desktop app or Chrome PWA not found; left URL on clipboard.",
+    ]
+    body = ""
+    for i, line in enumerate(shapes):
+        body += (
+            f"2026-10-26 10:0{i} t={i} | --- Alt+A pressed ---\n"
+            f"2026-10-26 10:0{i} t={i} | Copy attempt 1 on Brave.exe succeeded.\n"
+            f"2026-10-26 10:0{i} t={i} | {line}\n"
+        )
+    path = write_tmp(body)
+    try:
+        rows = parse(path)
+    finally:
+        os.unlink(path)
+    check("all 4 are failures", sum(1 for r in rows if not r["ok"]), 4)
+    check("all labelled send-failed", sorted(r["mode"] for r in rows), ["send-failed"] * 4)
+
+
 def test_press_boundaries():
     print("\n=== sessions start at a press, not at an outcome line ===")
     # A failure whose outcome appears BEFORE the next press must not leak into
@@ -226,6 +254,7 @@ def main():
     test_ahk_real_line_shapes()
     test_success_and_rate()
     test_since_filter()
+    test_send_failure_beats_copy_success()
     test_press_boundaries()
     test_multiple_files()
     print("\n=== Summary ===")

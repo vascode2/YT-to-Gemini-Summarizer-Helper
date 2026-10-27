@@ -52,6 +52,14 @@ SUCCESS_RE = re.compile(
     r"done; sent|\bSent\b.*\b(?:Gemini|Aside)\b|succeeded", re.I
 )
 FAILURE_RE = re.compile(r"ERROR: URL copy failed|Copy failed|gave up after|fast-failed", re.I)
+# "The flow finished but the summary was not delivered": Windows logs these when
+# the desktop/PWA/Aside UIA helper couldn't send, and logs "left URL on
+# clipboard" when no Gemini target existed. These are failures to a user even
+# though the copy leg already logged "succeeded", so they must mask that.
+SEND_FAILURE_RE = re.compile(
+    r"send failed|helper failed|left URL on clipboard|did not confirm a fresh chat",
+    re.I,
+)
 
 # Failure-mode classification, most specific first. Each pattern maps to a short
 # label; the first match wins so a line cannot be counted twice.
@@ -82,6 +90,13 @@ MODES = OrderedDict(
 def classify_session(lines: list[str]) -> str | None:
     """Return the failure mode for a failed session, or None if it succeeded."""
     body = "\n".join(lines)
+    # A send/paste failure must beat a copy-leg "succeeded": one Windows line is
+    # "Copy attempt 1 on X succeeded." and another is "Gemini desktop send
+    # failed: ...", so SUCCESS_RE matches the copy leg while the flow never
+    # delivered the summary. Without this check such a session reads as a
+    # success and silently inflates the rate.
+    if SEND_FAILURE_RE.search(body):
+        return "send-failed"
     if SUCCESS_RE.search(body):
         return None
     if not FAILURE_RE.search(body):
