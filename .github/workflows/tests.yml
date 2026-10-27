@@ -83,3 +83,36 @@ jobs:
             /tmp/cu_mac_diff.txt
           if-no-files-found: ignore
           retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # macOS: prove Mac/check_live_sync.sh actually detects drift (issue #4).
+  #
+  # A bare macOS job that just runs the checker would always SKIP — a fresh CI
+  # runner has no ~/.hammerspoon/init.lua, and the checker SKIPs (exit 0) when
+  # there is nothing to compare. That is indistinguishable from "drift-free",
+  # which is exactly why the live file has reverted fixes three times unnoticed.
+  #
+  # So instead the job SEEDS two fixtures into COPYURL_LIVE_INIT and asserts the
+  # checker's verdict on each:
+  #   1. pass:  live == tracked  -> checker exits 0 (no false alarm)
+  #   2. drift: one marker removed -> checker exits 1 and names the marker
+  # This exercises the drift detection on macOS without needing the real file.
+  macos-drift:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Seed a pass fixture (live == tracked) and expect no drift
+        run: |
+          cp Mac/hammerspoon/init.lua /tmp/cu_live_pass.lua
+          COPYURL_LIVE_INIT=/tmp/cu_live_pass.lua Mac/check_live_sync.sh
+
+      - name: Seed a drift fixture (one fix marker stripped) and expect detection
+        run: |
+          grep -v '^local function pressGeminiSendButton' Mac/hammerspoon/init.lua > /tmp/cu_live_drift.lua
+          # The checker exits 1 when it finds drift; that is the PASS condition
+          # for this step, so invert it and fail loudly if it instead exits 0.
+          if COPYURL_LIVE_INIT=/tmp/cu_live_drift.lua Mac/check_live_sync.sh; then
+            echo "::error::checker missed the injected drift (should have exited 1)"
+            exit 1
+          fi
