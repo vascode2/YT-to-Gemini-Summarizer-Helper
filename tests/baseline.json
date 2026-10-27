@@ -1,0 +1,8 @@
+{
+  "targets": {
+    "aside": {"min_rate": 80.0, "min_samples": 10},
+    "pwa": {"min_rate": 90.0, "min_samples": 10},
+    "unknown": {"min_rate": 0.0, "min_samples": 10}
+  },
+  "tolerance": 0.0
+}

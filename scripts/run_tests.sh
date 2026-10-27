@@ -11,7 +11,11 @@
 #      drives the hover -> trigger -> Gemini paste + Send handoff.
 #   5) Runs the Linux orchestrator (Linux/copyurl.sh) hermetically with shimmed
 #      OS tools — no desktop required, so it also runs in CI.
-#   6) Opt-in: the full real-desktop system test (COPYURL_FULL_SYSTEM=1).
+#   6) Tests the log analyzer's failure-mode classification.
+#   7) Rate guard: floor-checks the success rate per target browser.
+#      Fixture-driven in CI; floor-checks the real log when
+#      COPYURL_RATE_GUARD_LOG points at it.
+#   8) Opt-in: the full real-desktop system test (COPYURL_FULL_SYSTEM=1).
 #
 # Exit code 0 = all green. Non-zero = something failed (and what).
 #
@@ -131,7 +135,32 @@ else
   bad "analyze_log.py tests failed (see output above)"
 fi
 
-# ---- 7. full-system end-to-end (real copyurl.sh + ydotool + clipboard) ------
+# ---- 7. rate guard ----------------------------------------------------------
+# Turns "it broke again" into a CI failure. The guard floor-checks the measured
+# success rate per target browser (Aside vs PWA vs unknown), which is how the
+# 2026-10 Aside regression (50% on Aside vs ~68% historic) surfaces instead of
+# hiding in a blended rate.
+#
+# CI has no field log, so it runs the fixture-driven tests that prove the guard
+# flags degraded shapes and passes clean ones. `scripts/rate_guard.py` itself
+# runs against a real log only when COPYURL_RATE_GUARD_LOG points at one (local
+# desktop):
+#   COPYURL_RATE_GUARD_LOG=~/.local/state/copyurl/copyurl_log.txt scripts/run_tests.sh
+note "rate guard (per-target success-ratio floor)"
+if ! python3 tests/test_rate_guard.py 2>&1 | sed 's/^/    /'; then
+  bad "rate_guard.py fixture tests failed (see output above)"
+fi
+if [[ -n "${COPYURL_RATE_GUARD_LOG:-}" ]]; then
+  if python3 scripts/rate_guard.py "$COPYURL_RATE_GUARD_LOG" 2>&1 | sed 's/^/    /'; then
+    ok "field-log rate is at/above the baseline"
+  else
+    bad "field-log rate regressed below the baseline (see targets above)"
+  fi
+else
+  printf '  SKIP  set COPYURL_RATE_GUARD_LOG=<real log> to floor-check the live rate\n'
+fi
+
+# ---- 8. full-system end-to-end (real copyurl.sh + ydotool + clipboard) ------
 # The deepest test: runs the GENUINE Linux/copyurl.sh orchestrator (real ydotool
 # "]" trigger, real wl-clipboard polling, real window activation) against a real
 # headful Brave + the real extension, and asserts the hovered URL reaches the OS
