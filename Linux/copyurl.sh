@@ -41,7 +41,7 @@ set -uo pipefail
 # ----------------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------------
-CONFIG_VERSION="v10 2026-10-26 focus-aware-diagnosis"
+CONFIG_VERSION="v11 2026-10-27 title-steering"
 
 # Substring matched (case-insensitive on the extension side) against window
 # titles to find the Gemini window. The PWA's title contains "Gemini".
@@ -423,16 +423,30 @@ diagnose_copy_failure() {
 }
 
 activate_youtube() {
-  # Prefer the browser's window class: a title match can hit the Gemini app,
-  # whose chat title often mentions YouTube after the first summary.
+  # Two windows can share BROWSER_WMCLASS (Aside runs YouTube in one window and
+  # Gemini in another: README "separate Aside window"; or a split pane). Raising
+  # by class grabs the most recently used of them, which may be the Gemini
+  # window — and then the trigger types into a window with no YouTube page.
+  # Every field aside-failure (28/28) short-circuited here and never tried the
+  # title, so ALWAYS also attempt the title match: it steers focus to a window
+  # whose title actually says YouTube. Class first because a title match can hit
+  # a Gemini chat whose title mentions YouTube after a summary.
+  local class_ok=0
   if [[ -n "$BROWSER_WMCLASS" ]] && activate_window_by activateByWmClass "$BROWSER_WMCLASS"; then
-    return 0
+    class_ok=1
   fi
   # " - YouTube" (watch/search pages: "<title> - YouTube ...") avoids windows
   # that merely mention YouTube, e.g. a Gemini chat; fall back to the plain
   # needle for the home page, whose title is just "YouTube".
   if activate_window_by_title " - $YOUTUBE_TITLE_NEEDLE" \
     || activate_window_by_title "$YOUTUBE_TITLE_NEEDLE"; then
+    return 0
+  fi
+  if (( class_ok )); then
+    # The window came forward but no YouTube-titled window was focusable: the
+    # trigger may land in the wrong pane/tab. Tell the caller (which still types
+    # and lets the copy-wait + diagnosis decide) AND remember it for the hint.
+    vlog "raised by class, but no window titled '*$YOUTUBE_TITLE_NEEDLE*' is focusable"
     return 0
   fi
   log "WARN: could not activate YouTube/Brave window (title contains '$YOUTUBE_TITLE_NEEDLE'? is a YouTube tab open and frontmost in Brave?)"

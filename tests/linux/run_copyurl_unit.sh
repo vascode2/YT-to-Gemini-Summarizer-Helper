@@ -56,8 +56,13 @@ new_sandbox() {
 echo "gdbus $*" >>"$CU_SB/shim_calls"
 # CU_ACTIVATION_FAILS=1 makes every activation report not-found, so the
 # "browser window never came forward" branch of the diagnosis can be tested.
+# CU_TITLE_FAILS=1 makes only the *title* (activateBySubstring) activations
+# fail while class (activateByWmClass) activations still succeed — the case
+# where class raised a window but no YouTube-titled window is focusable.
 case "$*" in
   *setSortOrder*) echo "('highest_user_time',)" ;;
+  *activateBySubstring*)
+    [[ "${CU_ACTIVATION_FAILS:-0}${CU_TITLE_FAILS:-0}" == "00" ]] && echo "(true,)" || echo "(false,)" ;;
   *) [[ "${CU_ACTIVATION_FAILS:-0}" == "1" ]] && echo "(false,)" || echo "(true,)" ;;
 esac
 SH
@@ -187,6 +192,11 @@ if grep -q '^xclip -o' "$SB/shim_calls" && ! grep -q '^wl-paste' "$SB/shim_calls
 else
   bad "expected xclip polling, got: $(grep -E '^(xclip|wl-paste)' "$SB/shim_calls" | sort -u | tr '\n' ' ')"
 fi
+# activate_youtube must attempt BOTH: raise by class first, then steer by title
+# (a class match can hit a Gemini Aside window; the title match finds YouTube).
+# Both are vlog()'d by activate_window_by, so assert on the log.
+expect_log "activateByWmClass('org.asidelinux.Browser') -> (true,)"
+expect_log "activateBySubstring(' - YouTube') -> (true,)"
 # The sentinel must be written BEFORE the trigger, or a same-URL re-copy is
 # undetectable and every second press times out.
 first_write="$(sed -n 1p "$SB/clip_writes")"
@@ -429,6 +439,16 @@ expect_log "the browser window WAS raised"
 expect_log "keyboard focus is on another pane/tab"
 expect_log "Click the YouTube page itself"
 expect_nolog "The extension did not respond"
+
+note "activate_youtube: class succeeds but the YouTube title is unfocusable"
+new_sandbox
+CU_TITLE_FAILS=1 run_flow_scenario "user-clipboard-before" "$URL_A"
+expect_rc 0
+# Class activation still won, so the flow proceeds and the copy succeeds — the
+# title fallback is best-effort steering, not a gate. But the mismatch is logged
+# so a future "trigger went to the wrong pane" failure can be diagnosed.
+expect_log "raised by class, but no window titled '*YouTube*' is focusable"
+expect_log "done; sent url=$URL_A"
 
 note "diagnosis: activation failed, so the extension is not to blame for silence"
 new_sandbox
